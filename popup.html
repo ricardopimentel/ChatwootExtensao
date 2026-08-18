@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Chatwoot Helper</title>
+  <link rel="stylesheet" href="popup.css">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-logo">
+        <img src="icons/icon-48.png" alt="Chatwoot Helper Logo">
+        <div>
+          <h1>Chatwoot Helper</h1>
+          <p class="subtitle">Produtividade no Atendimento</p>
+        </div>
+      </div>
+      <div class="status-indicator" id="api-status" title="Conexão com Chatwoot"></div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="notifications" id="nav-notifications">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+        Mensagens
+        <span class="tab-badge hidden" id="notification-badge">0</span>
+      </button>
+      <button class="tab-btn" data-tab="reminders">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+        Lembretes
+      </button>
+      <button class="tab-btn" data-tab="save-current" id="nav-save-current">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+        Salvar Atual
+      </button>
+      <button class="tab-btn" data-tab="new-chat">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path><line x1="12" y1="2" x2="12" y2="8"></line><line x1="9" y1="5" x2="15" y2="5"></line></svg>
+        Novo Chat
+      </button>
+      <button class="tab-btn" data-tab="settings">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        Ajustes
+      </button>
+    </nav>
+
+    <!-- Content Sections -->
+    <main class="app-content">
+
+      <!-- Tab: Notifications Center -->
+      <section id="notifications" class="tab-pane active">
+        <div class="notifications-header-row">
+          <h2>Mensagens Pendentes</h2>
+          <button id="btn-clear-all-notifications" class="btn btn-secondary btn-sm hidden">Limpar Todas</button>
+        </div>
+        <div class="notifications-container" id="notifications-list">
+          <!-- Dynamically populated -->
+        </div>
+      </section>
+      
+      <!-- Tab: Reminders -->
+      <section id="reminders" class="tab-pane">
+        <div class="search-box">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="search-input" placeholder="Buscar por título, tag ou notas...">
+        </div>
+        <div class="reminders-container" id="reminders-list">
+          <!-- Dynamically populated -->
+        </div>
+      </section>
+
+      <!-- Tab: Save Current Conversation -->
+      <section id="save-current" class="tab-pane">
+        <!-- Warning if not on a Chatwoot conversation page -->
+        <div id="not-chatwoot-warning" class="info-card warning">
+          <div class="card-icon">⚠️</div>
+          <div class="card-body">
+            <h3>Nenhuma Conversa Ativa</h3>
+            <p>Navegue até uma conversa específica em seu painel Chatwoot para poder salvá-la aqui.</p>
+            <a href="#" id="btn-go-to-chatwoot" class="btn btn-secondary">Abrir Chatwoot</a>
+          </div>
+        </div>
+
+        <!-- Form if on a conversation page -->
+        <form id="save-current-form" class="app-form hidden">
+          <div class="form-group">
+            <label>Conversa Selecionada</label>
+            <div class="url-display" id="current-conv-display">
+              <span class="conv-id">ID: #0000</span>
+              <span class="conv-url text-truncate">https://...</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="save-title">Título do Lembrete</label>
+            <input type="text" id="save-title" placeholder="Ex: Retornar com orçamento" required>
+            <span class="helper-text" id="save-contact-info">Nome do contato: Buscando...</span>
+          </div>
+
+          <div class="form-group">
+            <label for="save-tag">Marcador / Tag</label>
+            <div class="tag-input-wrapper">
+              <input type="text" id="save-tag" placeholder="Ex: Pendente, Orçamento, Suporte">
+              <div class="suggestions-list" id="label-suggestions" style="display:none;"></div>
+            </div>
+            <span class="helper-text">Pressione vírgula ou Enter para criar marcadores.</span>
+            <div class="tags-container" id="active-tags-list"></div>
+          </div>
+
+          <div class="form-group">
+            <label for="save-notes">Notas / Observações</label>
+            <textarea id="save-notes" rows="4" placeholder="Adicione detalhes sobre o motivo de retornar a esta conversa..."></textarea>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="btn-save-current">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              Salvar Lembrete
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Tab: New Chat -->
+      <section id="new-chat" class="tab-pane">
+        <form id="new-chat-form" class="app-form">
+          <div class="form-group">
+            <label for="new-chat-account">Conta Chatwoot</label>
+            <select id="new-chat-account" required>
+              <option value="">Carregando contas...</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="new-chat-inbox">Canal / Caixa de Entrada</label>
+            <select id="new-chat-inbox" required>
+              <option value="">Selecione uma conta primeiro...</option>
+            </select>
+            <span class="helper-text warning-text hidden" id="inbox-channel-warning">Esse canal pode não suportar início de conversa ativo.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="new-chat-phone">Número de Telefone</label>
+            <input type="tel" id="new-chat-phone" placeholder="Ex: +55 (11) 99999-9999" required>
+            <span class="helper-text">Insira o código do país + DDD + número (somente dígitos).</span>
+          </div>
+
+          <div class="form-group">
+            <label for="new-chat-name">Nome do Contato</label>
+            <input type="text" id="new-chat-name" placeholder="Ex: João Silva (Será criado se não existir)">
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="btn-start-chat">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              Iniciar Conversa
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Tab: Settings -->
+      <section id="settings" class="tab-pane">
+        <form id="settings-form" class="app-form">
+          <div class="form-group">
+            <label for="settings-url">Endereço da Instalação Chatwoot</label>
+            <input type="url" id="settings-url" placeholder="https://typebotifto.duckdns.org" required>
+            <span class="helper-text">URL base do seu Chatwoot (sem barra no final).</span>
+          </div>
+
+          <div class="form-group">
+            <label for="settings-token">Token de Acesso API</label>
+            <div class="password-input-wrapper">
+              <input type="password" id="settings-token" placeholder="Insira seu Token de Acesso" required>
+              <button type="button" class="btn-toggle-password" id="btn-toggle-token">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="eye-open"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+            <span class="helper-text">
+              Encontre no Chatwoot em: <span class="highlight">Configurações de Perfil -> Token de Acesso</span> (fim da página).
+            </span>
+          </div>
+
+          <div class="form-group">
+            <label for="settings-country">Código de País Padrão</label>
+            <input type="text" id="settings-country" placeholder="+55" value="+55">
+            <span class="helper-text">Será inserido se o número de telefone não tiver código de país.</span>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group half">
+              <label for="settings-default-account">Conta Padrão</label>
+              <select id="settings-default-account">
+                <option value="">Selecione...</option>
+              </select>
+            </div>
+            <div class="form-group half">
+              <label for="settings-default-inbox">Caixa de Entrada Padrão</label>
+              <select id="settings-default-inbox">
+                <option value="">Selecione...</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="btn-save-settings">
+              Salvar Configurações
+            </button>
+          </div>
+        </form>
+      </section>
+
+    </main>
+
+    <!-- Toast Notifications -->
+    <div id="toast" class="toast hidden">
+      <span class="toast-message">Mensagem do Toast</span>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
