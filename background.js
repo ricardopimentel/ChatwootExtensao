@@ -34,6 +34,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       console.log('[Chatwoot Helper] WebSocket is offline. Reinitializing...');
       initConnection();
     }
+  } else if (alarm.name.startsWith('reminder_')) {
+    showReminderAlarmNotification(alarm.name);
   }
 });
 
@@ -57,7 +59,7 @@ async function initConnection(force = false) {
 
   try {
     // Retrieve configuration
-    const result = await chrome.storage.local.get(['chatwootSettings']);
+    const result = await chrome.storage.sync.get(['chatwootSettings']);
     config = result.chatwootSettings;
 
     if (!config || !config.url || !config.token) {
@@ -253,26 +255,46 @@ function stopHeartbeat() {
 // NOTIFICATION DISPLAY & ACTION
 function showNotification(msg, accountId) {
   const senderName = msg.sender ? msg.sender.name : 'Cliente';
-  const messageContent = msg.content || 'Nova mensagem (mídia/anexo)';
   const conversationId = msg.conversation_id;
+  const notificationId = `chatwoot_conv_${accountId}_${conversationId}`;
 
-  // Statelessly encode needed URL components into the notification ID
-  // Format: chatwoot_conv_<accountId>_<conversationId>_<timestamp>
-  const notificationId = `chatwoot_conv_${accountId}_${conversationId}_${Date.now()}`;
+  // Fetch all pending notifications from local storage to group them
+  chrome.storage.local.get(['chatwootNotifications'], (result) => {
+    const list = result.chatwootNotifications || [];
+    
+    // Filter notifications for this specific conversation
+    const convMsgs = list.filter(item => 
+      String(item.accountId) === String(accountId) && 
+      String(item.conversationId) === String(conversationId)
+    );
 
-  chrome.notifications.create(notificationId, {
-    type: 'basic',
-    iconUrl: 'icons/icon-128.png',
-    title: `Nova mensagem de ${senderName}`,
-    message: messageContent,
-    priority: 2,
-    requireInteraction: true
-  }, (id) => {
-    if (chrome.runtime.lastError) {
-      console.error('[Chatwoot Helper] Notification creation error:', chrome.runtime.lastError);
+    let messageText = '';
+    if (convMsgs.length > 0) {
+      // Sort chronologically (oldest first)
+      const sortedMsgs = [...convMsgs].sort((a, b) => a.timestamp - b.timestamp);
+      messageText = sortedMsgs.map(item => item.content).join('\n');
     } else {
-      console.log('[Chatwoot Helper] Notification created successfully:', id);
+      messageText = msg.content || 'Nova mensagem (mídia/anexo)';
     }
+    
+    const title = convMsgs.length > 1 
+      ? `[${convMsgs.length} novas mensagens] de ${senderName}` 
+      : `Nova mensagem de ${senderName}`;
+
+    chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: 'icons/icon-128.png',
+      title: title,
+      message: messageText,
+      priority: 2,
+      requireInteraction: true
+    }, (id) => {
+      if (chrome.runtime.lastError) {
+        console.error('[Chatwoot Helper] Notification creation error:', chrome.runtime.lastError);
+      } else {
+        console.log('[Chatwoot Helper] Notification created successfully:', id);
+      }
+    });
   });
 }
 
@@ -286,7 +308,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
     // Clear notifications for this conversation
     removeNotificationsForConversation(accountId, conversationId);
 
-    chrome.storage.local.get(['chatwootSettings'], (result) => {
+    chrome.storage.sync.get(['chatwootSettings'], (result) => {
       const savedConfig = result.chatwootSettings;
       if (savedConfig && savedConfig.url) {
         const targetUrl = `${savedConfig.url}/app/accounts/${accountId}/conversations/${conversationId}`;
@@ -366,5 +388,31 @@ function removeNotificationsForConversation(accountId, conversationId) {
     chrome.storage.local.set({ chatwootNotifications: filteredList }, () => {
       updateExtensionBadge(filteredList);
     });
+  });
+}
+
+function showReminderAlarmNotification(reminderId) {
+  // Fetch the reminder from synced storage
+  chrome.storage.sync.get(['chatwootReminders'], (result) => {
+    const list = result.chatwootReminders || [];
+    const reminder = list.find(item => item.id === reminderId);
+    
+    if (reminder) {
+      // Build notification
+      const notificationId = `alarm_conv_${reminder.accountId}_${reminder.conversationId}`;
+      const title = `Lembrete: Responder ${reminder.contactName}`;
+      const message = reminder.notes 
+        ? `${reminder.title}\nNotas: ${reminder.notes}` 
+        : `${reminder.title}`;
+
+      chrome.notifications.create(notificationId, {
+        type: 'basic',
+        iconUrl: 'icons/icon-128.png',
+        title: title,
+        message: message,
+        priority: 2,
+        requireInteraction: true
+      });
+    }
   });
 }

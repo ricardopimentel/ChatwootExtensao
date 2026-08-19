@@ -46,6 +46,9 @@ const elements = {
   labelSuggestions: document.getElementById('label-suggestions'),
   activeTagsList: document.getElementById('active-tags-list'),
   saveNotes: document.getElementById('save-notes'),
+  saveAlarmEnable: document.getElementById('save-alarm-enable'),
+  saveAlarmDatetimeWrapper: document.getElementById('save-alarm-datetime-wrapper'),
+  saveAlarmDatetime: document.getElementById('save-alarm-datetime'),
   
   // Tab: New Chat
   newChatForm: document.getElementById('new-chat-form'),
@@ -95,10 +98,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Clear all notifications listener
   elements.btnClearAllNotifications.addEventListener('click', clearAllNotifications);
 
-  // Sync notifications list in real-time if storage changes
+  // Sync notifications, reminders, and settings in real-time if storage changes
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local' && changes.chatwootNotifications) {
       loadNotifications();
+    }
+    if (namespace === 'sync' && changes.chatwootReminders) {
+      loadReminders(elements.searchInput.value);
+    }
+    if (namespace === 'sync' && changes.chatwootSettings) {
+      loadSettings().then(() => {
+        updateConnectionStatus();
+      });
     }
   });
   
@@ -110,6 +121,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadReminders(e.target.value);
   });
   
+  // Alarm checkbox toggle listener
+  elements.saveAlarmEnable.addEventListener('change', (e) => {
+    if (e.target.checked) {
+      elements.saveAlarmDatetimeWrapper.classList.remove('hidden');
+      const now = new Date();
+      now.setMinutes(now.getMinutes() + 5);
+      const tzOffset = now.getTimezoneOffset() * 60000;
+      const localISOTime = (new Date(now.getTime() - tzOffset)).toISOString().slice(0, 16);
+      elements.saveAlarmDatetime.value = localISOTime;
+      elements.saveAlarmDatetime.min = localISOTime;
+    } else {
+      elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+      elements.saveAlarmDatetime.value = '';
+    }
+  });
+
   // Phone contact search listeners
   elements.newChatPhone.addEventListener('blur', lookupContactByPhone);
   elements.newChatPhone.addEventListener('change', lookupContactByPhone);
@@ -173,7 +200,7 @@ function switchTab(tabId) {
 // STORAGE & SETTINGS LOAD
 async function loadSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['chatwootSettings'], (result) => {
+    chrome.storage.sync.get(['chatwootSettings'], (result) => {
       if (result.chatwootSettings) {
         config = { ...config, ...result.chatwootSettings };
         // Populate inputs
@@ -210,7 +237,7 @@ function setupSettingsHandlers() {
     config.defaultInbox = elements.settingsDefaultInbox.value;
 
     // Save to storage
-    chrome.storage.local.set({ chatwootSettings: config }, async () => {
+    chrome.storage.sync.set({ chatwootSettings: config }, async () => {
       showToast('Configurações salvas com sucesso!', 'success');
       updateConnectionStatus();
       
@@ -570,6 +597,29 @@ function handleSaveCurrentSubmit(e) {
     return;
   }
 
+  const alarmEnabled = elements.saveAlarmEnable.checked;
+  let alarmTime = '';
+  if (alarmEnabled) {
+    const val = elements.saveAlarmDatetime.value; // Format: YYYY-MM-DDTHH:MM
+    const match = val.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!match) {
+      showToast('Formato de data e hora inválido.', 'error');
+      return;
+    }
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10) - 1; // 0-indexed
+    const day = parseInt(match[3], 10);
+    const hour = parseInt(match[4], 10);
+    const minute = parseInt(match[5], 10);
+    const selectedTime = new Date(year, month, day, hour, minute).getTime();
+
+    if (isNaN(selectedTime) || selectedTime <= Date.now()) {
+      showToast('Selecione uma data e hora futura para o alarme.', 'error');
+      return;
+    }
+    alarmTime = selectedTime;
+  }
+
   const reminder = {
     id: `reminder_${currentTabInfo.accountId}_${currentTabInfo.conversationId}`,
     url: currentTabInfo.url,
@@ -580,20 +630,29 @@ function handleSaveCurrentSubmit(e) {
     title: title,
     tags: [...activeTags],
     notes: notes,
+    alarmTime: alarmTime,
     savedAt: Date.now()
   };
 
-  chrome.storage.local.get(['chatwootReminders'], (result) => {
+  chrome.storage.sync.get(['chatwootReminders'], (result) => {
     const list = result.chatwootReminders || [];
     // Remove if exists to update
     const filteredList = list.filter(item => item.id !== reminder.id);
     filteredList.unshift(reminder); // Add to the top of list
     
-    chrome.storage.local.set({ chatwootReminders: filteredList }, () => {
+    chrome.storage.sync.set({ chatwootReminders: filteredList }, () => {
+      // Create alarm if time is set
+      if (alarmTime) {
+        chrome.alarms.create(reminder.id, { when: alarmTime });
+      }
+
       showToast('Lembrete salvo com sucesso!', 'success');
       
       // Reset form
       elements.saveNotes.value = '';
+      elements.saveAlarmEnable.checked = false;
+      elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+      elements.saveAlarmDatetime.value = '';
       activeTags = [];
       renderTags();
       
@@ -605,7 +664,7 @@ function handleSaveCurrentSubmit(e) {
 
 // LOAD & RENDER REMINDERS
 function loadReminders(searchQuery = '') {
-  chrome.storage.local.get(['chatwootReminders'], (result) => {
+  chrome.storage.sync.get(['chatwootReminders'], (result) => {
     const list = result.chatwootReminders || [];
     elements.remindersList.innerHTML = '';
 
@@ -650,6 +709,21 @@ function loadReminders(searchQuery = '') {
         notesHtml = `<div class="reminder-notes">${item.notes}</div>`;
       }
 
+      // Build alarm HTML
+      let alarmHtml = '';
+      if (item.alarmTime) {
+        const date = new Date(item.alarmTime);
+        const dateStr = date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        const hasPassed = item.alarmTime <= Date.now();
+        const alarmClass = hasPassed ? 'alarm-tag passed' : 'alarm-tag';
+        alarmHtml = `
+          <div class="${alarmClass}">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            Lembrete programado: ${dateStr}
+          </div>
+        `;
+      }
+
       card.innerHTML = `
         <div class="reminder-header">
           <a href="#" class="reminder-title-link" data-url="${item.url}">
@@ -667,6 +741,7 @@ function loadReminders(searchQuery = '') {
           <span>ID: #${item.conversationId} <span class="inbox-name-badge" data-acc="${item.accountId}" data-inbox="${item.inboxId || ''}"></span></span>
         </div>
         
+        ${alarmHtml}
         ${notesHtml}
         ${tagsHtml}
         
@@ -713,10 +788,13 @@ function loadReminders(searchQuery = '') {
 }
 
 function deleteReminder(id) {
-  chrome.storage.local.get(['chatwootReminders'], (result) => {
+  // Cancel chrome alarm
+  chrome.alarms.clear(id);
+
+  chrome.storage.sync.get(['chatwootReminders'], (result) => {
     const list = result.chatwootReminders || [];
     const filteredList = list.filter(item => item.id !== id);
-    chrome.storage.local.set({ chatwootReminders: filteredList }, () => {
+    chrome.storage.sync.set({ chatwootReminders: filteredList }, () => {
       showToast('Lembrete excluído.', 'success');
       loadReminders(elements.searchInput.value);
     });
@@ -763,11 +841,32 @@ async function handleNewChatSubmit(e) {
     let contactId = null;
     let contactName = name || phone;
     
+    let conversationId = null;
+
     if (searchRes && searchRes.payload && searchRes.payload.length > 0) {
       // Contact exists
       contactId = searchRes.payload[0].id;
       contactName = searchRes.payload[0].name || contactName;
       showToast('Contato encontrado no Chatwoot!', 'success');
+
+      // Check for active conversation in the same inbox
+      try {
+        const response = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/${contactId}/conversations`);
+        const convs = response && Array.isArray(response) ? response : (response && Array.isArray(response.payload) ? response.payload : null);
+        if (convs && Array.isArray(convs)) {
+          // Find an active (non-resolved) conversation for this inbox
+          const activeConv = convs.find(c => 
+            String(c.inbox_id) === String(inboxId) && 
+            c.status !== 'resolved'
+          );
+          if (activeConv) {
+            conversationId = activeConv.id;
+            showToast('Conversa ativa encontrada!', 'success');
+          }
+        }
+      } catch (err) {
+        console.warn('Error checking existing conversations:', err);
+      }
     } else {
       // Step 2: Create Contact
       // POST /api/v1/accounts/{account_id}/contacts
@@ -804,21 +903,22 @@ async function handleNewChatSubmit(e) {
       // Usually, it means already linked, which is fine, we can proceed
     }
 
-    // Step 4: Create Conversation
-    // POST /api/v1/accounts/{account_id}/conversations
-    showToast('Iniciando conversa...', 'success');
-    const convRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations`, {
-      method: 'POST',
-      body: JSON.stringify({
-        contact_id: parseInt(contactId),
-        inbox_id: parseInt(inboxId),
-        status: 'open'
-      })
-    });
-
-    const conversationId = convRes?.id;
+    // Step 4: Create Conversation (only if no active conversation exists)
     if (!conversationId) {
-      throw new Error('Não foi possível iniciar a conversa na API.');
+      showToast('Iniciando conversa...', 'success');
+      const convRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations`, {
+        method: 'POST',
+        body: JSON.stringify({
+          contact_id: parseInt(contactId),
+          inbox_id: parseInt(inboxId),
+          status: 'open'
+        })
+      });
+
+      conversationId = convRes?.id;
+      if (!conversationId) {
+        throw new Error('Não foi possível iniciar a conversa na API.');
+      }
     }
 
     // Redirect user to the new conversation
