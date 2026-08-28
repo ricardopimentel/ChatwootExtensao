@@ -33,6 +33,7 @@ let audioChunks = [];
 let recordingStartTime = 0;
 let recordingTimerInterval = null;
 let replyParentMessageId = null;
+let editParentMessageId = null;
 
 // DOM SELECTORS
 const elements = {
@@ -404,6 +405,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Close edit preview bar
+  const btnEditPreviewClose = document.getElementById('btn-edit-preview-close');
+  if (btnEditPreviewClose) {
+    btnEditPreviewClose.addEventListener('click', (e) => {
+      e.preventDefault();
+      cancelMessageEdit();
+    });
+  }
+
   // Dismiss context menu when clicking outside
   document.addEventListener('click', (e) => {
     const menu = document.getElementById('msg-context-menu');
@@ -413,6 +423,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
   });
+
+  // Setup Message Context Menu events
+  setupContextMenuHandlers();
 });
 
 // TAB HANDLING
@@ -2108,11 +2121,38 @@ async function loadChatMessages(accountId, conversationId, silent = false) {
 function renderChatMessages(messages, silent) {
   const isNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 50;
   let messagesHtml = '';
+
+  const reactionsMap = {};
+  const activeMessages = messages.filter(msg => {
+    const parentId = msg.parent_id || (msg.content_attributes && msg.content_attributes.in_reply_to);
+    
+    // In Chatwoot, reactions can have a content_attributes.is_reaction flag or contain a single emoji as a reply
+    const isSingleEmoji = msg.content && msg.content.length <= 8 && isEmojiString(msg.content);
+    const isReaction = (msg.content_attributes && (msg.content_attributes.is_reaction || msg.content_attributes.reaction || msg.content_attributes.reaction_type)) || (isSingleEmoji && parentId);
+
+    if (isReaction && parentId) {
+      const pId = parentId;
+      reactionsMap[pId] = reactionsMap[pId] || [];
+      
+      // Prevent duplicate emojis from the same sender to look clean
+      const senderName = msg.sender ? msg.sender.name : (msg.message_type === 0 || msg.message_type === 'incoming' ? (currentTabInfo.contactName || 'Contato') : 'Você');
+      const alreadyReacted = reactionsMap[pId].some(r => r.sender === senderName && r.emoji === msg.content);
+      if (!alreadyReacted) {
+        reactionsMap[pId].push({
+          id: msg.id,
+          emoji: msg.content,
+          sender: senderName
+        });
+      }
+      return false; // Exclude reaction message from chat bubbles listing
+    }
+    return true; // Keep standard messages
+  });
   
-  if (messages.length === 0) {
+  if (activeMessages.length === 0) {
     messagesHtml = '<div style="text-align:center; padding:20px; color:var(--text-muted);">Nenhuma mensagem nesta conversa.</div>';
   } else {
-    messages.forEach(msg => {
+    activeMessages.forEach(msg => {
       const type = msg.message_type;
       
       let bubbleClass = 'chat-msg-bubble';
@@ -2181,17 +2221,25 @@ function renderChatMessages(messages, silent) {
       }
 
       let quoteHtml = '';
-      if (msg.parent_message) {
+      const parentId = msg.parent_id || (msg.content_attributes && msg.content_attributes.in_reply_to);
+      let parentMsg = msg.parent_message;
+      if (!parentMsg && parentId) {
+        parentMsg = messages.find(m => m.id == parentId);
+      }
+
+      if (parentMsg) {
         let senderName = 'Agente';
-        if (msg.parent_message.sender) {
-          senderName = msg.parent_message.sender.name || 'Contato';
-        } else if (msg.parent_message.message_type === 'incoming') {
+        if (parentMsg.sender) {
+          senderName = parentMsg.sender.name || 'Contato';
+        } else if (parentMsg.message_type === 0 || parentMsg.message_type === 'incoming') {
           senderName = currentTabInfo.contactName || 'Contato';
+        } else {
+          senderName = 'Você';
         }
         quoteHtml = `
-          <div class="chat-msg-reply-quote">
+          <div class="chat-msg-reply-quote" data-target-id="${parentMsg.id || parentId}" style="cursor: pointer;">
             <span class="reply-quote-sender">${senderName}</span>
-            <span class="reply-quote-text">${msg.parent_message.content || 'Mensagem de Mídia/Anexo'}</span>
+            <span class="reply-quote-text">${parentMsg.content || 'Mensagem de Mídia/Anexo'}</span>
           </div>
         `;
       }
@@ -2205,6 +2253,16 @@ function renderChatMessages(messages, silent) {
       } else {
         const senderName = msg.sender ? msg.sender.name : (type === 0 || type === 'incoming' ? (currentTabInfo.contactName || 'Contato') : 'Você');
         const cleanContent = (msg.content || '').replace(/"/g, '&quot;');
+        
+        let reactionsHtml = '';
+        if (reactionsMap[msg.id] && reactionsMap[msg.id].length > 0) {
+          reactionsHtml = `
+            <div class="chat-msg-reactions">
+              ${reactionsMap[msg.id].map(r => `<span class="chat-msg-reaction-item" title="Reagido por ${r.sender}">${r.emoji}</span>`).join('')}
+            </div>
+          `;
+        }
+
         messagesHtml += `
           <div class="${bubbleClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
             <button type="button" class="btn-msg-menu" title="Opções da mensagem">
@@ -2212,6 +2270,7 @@ function renderChatMessages(messages, silent) {
             </button>
             ${quoteHtml}
             ${contentHtml}
+            ${reactionsHtml}
             <span class="chat-msg-time">${timeStr}</span>
           </div>
         `;
@@ -2243,6 +2302,7 @@ function closeChatView() {
   }
   currentActiveChat = null;
   cancelMessageReply();
+  cancelMessageEdit();
   elements.chatReplyInput.value = '';
   
   // Collapse formatting toolbar and emoji picker
@@ -2347,6 +2407,35 @@ async function sendChatMessage(e) {
   if (sendBtn) sendBtn.disabled = true;
 
   try {
+    if (editParentMessageId) {
+      // Step 1: Delete/Revoke original message
+      const deleteEndpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages/${editParentMessageId}`;
+      await chatwootFetch(deleteEndpoint, {
+        method: 'DELETE'
+      });
+
+      // Step 2: Send new message with corrected text set as reply to the deleted message
+      const sendEndpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+      await chatwootFetch(sendEndpoint, {
+        method: 'POST',
+        body: JSON.stringify({
+          content: replyText,
+          message_type: 'outgoing',
+          private: false,
+          parent_id: editParentMessageId,
+          content_attributes: {
+            in_reply_to: editParentMessageId
+          }
+        })
+      });
+
+      elements.chatReplyInput.value = '';
+      elements.chatReplyInput.style.height = 'auto'; // Reset textarea height
+      cancelMessageEdit();
+      await loadChatMessages(accountId, conversationId, true);
+      return;
+    }
+
     const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
     
     let bodyData;
@@ -2357,6 +2446,7 @@ async function sendChatMessage(e) {
       bodyData.append('content', replyText || ''); // Always append content parameter
       if (replyParentMessageId) {
         bodyData.append('parent_id', replyParentMessageId);
+        bodyData.append('content_attributes[in_reply_to]', replyParentMessageId);
       }
       pendingAttachments.forEach(file => {
         bodyData.append('attachments[]', file, file.name);
@@ -2369,6 +2459,9 @@ async function sendChatMessage(e) {
       };
       if (replyParentMessageId) {
         payload.parent_id = replyParentMessageId;
+        payload.content_attributes = {
+          in_reply_to: replyParentMessageId
+        };
       }
       bodyData = JSON.stringify(payload);
     }
@@ -3400,6 +3493,56 @@ function setupLightboxHandlers() {
         openLightbox(url, 'file', filename);
         return;
       }
+
+      // 5. Click on Message context menu caret (btn-msg-menu)
+      const btnMenu = e.target.closest('.btn-msg-menu');
+      if (btnMenu) {
+        e.preventDefault();
+        const bubble = btnMenu.closest('.chat-msg-bubble');
+        if (!bubble) return;
+
+        const msgId = bubble.getAttribute('data-msg-id');
+        const msgContent = bubble.getAttribute('data-msg-content');
+        const senderName = bubble.getAttribute('data-sender-name');
+
+        activeContextMessage = { id: msgId, content: msgContent, senderName: senderName };
+
+        // Hide Edit & Delete options for incoming messages
+        const isOutgoing = bubble.classList.contains('outgoing');
+        const btnEdit = document.getElementById('btn-msg-edit');
+        const btnDelete = document.getElementById('btn-msg-delete');
+        if (btnEdit) btnEdit.style.display = isOutgoing ? 'flex' : 'none';
+        if (btnDelete) btnDelete.style.display = isOutgoing ? 'flex' : 'none';
+
+        // Position and show dropdown menu
+        const menu = document.getElementById('msg-context-menu');
+        if (menu) {
+          const rect = btnMenu.getBoundingClientRect();
+          let top = rect.bottom;
+          let left = rect.left - 90;
+
+          // Align bounds safely
+          if (left < 10) left = 10;
+          if (left + 120 > window.innerWidth) left = window.innerWidth - 130;
+          if (top + 130 > window.innerHeight) top = rect.top - 120; // Position above if no room below
+
+          menu.style.top = `${top}px`;
+          menu.style.left = `${left}px`;
+          menu.classList.remove('hidden');
+        }
+        return;
+      }
+
+      // 6. Click on Quote preview (scroll to parent message)
+      const quote = e.target.closest('.chat-msg-reply-quote');
+      if (quote) {
+        e.preventDefault();
+        const targetId = quote.getAttribute('data-target-id');
+        if (targetId) {
+          scrollToMessageId(targetId);
+        }
+        return;
+      }
     });
   }
 }
@@ -3619,5 +3762,216 @@ function setupCanvasDrawingEvents() {
         editingAttachmentIndex = -1;
       }, 'image/png');
     });
+  }
+}
+
+// ==========================================
+// MESSAGE REPLIES & CONTEXT MENUS SYSTEM
+// ==========================================
+let activeContextMessage = null;
+
+function cancelMessageReply() {
+  replyParentMessageId = null;
+  const replyBar = document.getElementById('reply-preview-bar');
+  if (replyBar) replyBar.classList.add('hidden');
+}
+
+function cancelMessageEdit() {
+  editParentMessageId = null;
+  const editBar = document.getElementById('edit-preview-bar');
+  if (editBar) editBar.classList.add('hidden');
+  
+  // Clear textarea input and restore submit button layout
+  elements.chatReplyInput.value = '';
+  elements.chatReplyInput.placeholder = 'Digite uma mensagem...';
+  elements.chatReplyInput.style.height = 'auto';
+}
+
+function isEmojiString(str) {
+  if (!str) return false;
+  // Emoji unicode block regex matching single emojis
+  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{1F191}-\u{1F251}\u{1F900}-\u{1F9FF}\u{1F300}-\u{1F5FF}\u{1F6D0}-\u{1F6DF}\u{1F6E0}-\u{1F6EF}\u{1F7E0}-\u{1F7EF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}\u{2702}\u{2705}\u{270A}\u{270B}\u{2728}\u{274C}\u{274E}\u{2753}-\u{2757}\u{2795}-\u{2797}\u{27B0}\u{27BF}\u{2B1B}\u{2B1C}\u{2B50}\u{2B55}\u{3030}\u{303D}\u{3297}\u{3299}]/u;
+  return emojiRegex.test(str);
+}
+
+async function sendReaction(messageId, emoji) {
+  if (!currentActiveChat) return;
+  const { accountId, id: conversationId } = currentActiveChat;
+
+  try {
+    const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+    await chatwootFetch(endpoint, {
+      method: 'POST',
+      body: JSON.stringify({
+        content: emoji,
+        message_type: 'outgoing',
+        private: false,
+        parent_id: messageId,
+        content_attributes: {
+          in_reply_to: messageId,
+          is_reaction: true
+        }
+      })
+    });
+
+    await loadChatMessages(accountId, conversationId, true);
+  } catch (err) {
+    console.error('Error sending reaction:', err);
+    showToast('Erro ao reagir.', 'error');
+  } finally {
+    const menu = document.getElementById('msg-context-menu');
+    if (menu) menu.classList.add('hidden');
+  }
+}
+
+function setupContextMenuHandlers() {
+  const replyBtn = document.getElementById('btn-msg-reply');
+  const editBtn = document.getElementById('btn-msg-edit');
+  const copyBtn = document.getElementById('btn-msg-copy');
+  const deleteBtn = document.getElementById('btn-msg-delete');
+  const menu = document.getElementById('msg-context-menu');
+
+  const replyBar = document.getElementById('reply-preview-bar');
+  const replySender = document.getElementById('reply-preview-sender');
+  const replyText = document.getElementById('reply-preview-text');
+
+  const editBar = document.getElementById('edit-preview-bar');
+  const editPreviewText = document.getElementById('edit-preview-text');
+
+  const reactionsContainer = document.getElementById('msg-context-reactions');
+
+  if (!replyBtn || !editBtn || !copyBtn || !deleteBtn || !menu) return;
+
+  // Handle Emoji reactions click
+  if (reactionsContainer) {
+    reactionsContainer.addEventListener('click', (e) => {
+      const emojiBtn = e.target.closest('.btn-reaction-emoji');
+      if (emojiBtn && activeContextMessage) {
+        e.preventDefault();
+        const emoji = emojiBtn.getAttribute('data-emoji');
+        sendReaction(activeContextMessage.id, emoji);
+      }
+    });
+  }
+
+  // Handle "Responder" option click
+  replyBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!activeContextMessage) return;
+
+    // Clear editing mode if active
+    cancelMessageEdit();
+
+    replyParentMessageId = activeContextMessage.id;
+    
+    if (replySender && replyText && replyBar) {
+      replySender.textContent = activeContextMessage.senderName;
+      replyText.textContent = activeContextMessage.content || 'Mensagem de Mídia/Anexo';
+      replyBar.classList.remove('hidden');
+
+      // Scroll chat area to bottom after DOM layout reflow
+      setTimeout(() => {
+        if (elements.chatMessagesArea) {
+          elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
+        }
+      }, 50);
+    }
+
+    menu.classList.add('hidden');
+    elements.chatReplyInput.focus();
+  });
+
+  // Handle "Editar" option click
+  editBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!activeContextMessage) return;
+
+    // Clear replying mode if active
+    cancelMessageReply();
+
+    editParentMessageId = activeContextMessage.id;
+    
+    if (editPreviewText && editBar) {
+      editPreviewText.textContent = activeContextMessage.content || '';
+      editBar.classList.remove('hidden');
+
+      // Set input text and focus
+      elements.chatReplyInput.value = activeContextMessage.content || '';
+      elements.chatReplyInput.placeholder = 'Edite sua mensagem...';
+      elements.chatReplyInput.focus();
+
+      // Scroll chat area to bottom after DOM layout reflow
+      setTimeout(() => {
+        if (elements.chatMessagesArea) {
+          elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
+        }
+      }, 50);
+    }
+
+    menu.classList.add('hidden');
+  });
+
+  // Handle "Copiar" option click
+  copyBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!activeContextMessage) return;
+
+    const contentToCopy = activeContextMessage.content || '';
+    navigator.clipboard.writeText(contentToCopy).then(() => {
+      showToast('Mensagem copiada para a área de transferência!', 'success');
+    }).catch(err => {
+      console.error('Failed to copy text:', err);
+      showToast('Erro ao copiar mensagem.', 'error');
+    });
+
+    menu.classList.add('hidden');
+  });
+
+  // Handle "Excluir" option click
+  deleteBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!activeContextMessage) return;
+
+    const confirmDelete = confirm('Tem certeza que deseja excluir esta mensagem?');
+    if (!confirmDelete) {
+      menu.classList.add('hidden');
+      return;
+    }
+
+    const { accountId, id: conversationId } = currentActiveChat;
+    try {
+      const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages/${activeContextMessage.id}`;
+      await chatwootFetch(endpoint, {
+        method: 'DELETE'
+      });
+
+      showToast('Mensagem excluída com sucesso.', 'success');
+      await loadChatMessages(accountId, conversationId, true);
+    } catch (err) {
+      console.error('Error deleting message:', err);
+      showToast(`Erro ao excluir: ${err.message}`, 'error');
+    } finally {
+      menu.classList.add('hidden');
+    }
+  });
+}
+
+// Scroll viewport to target message ID and play flash highlight animation
+function scrollToMessageId(id) {
+  const targetEl = elements.chatMessagesArea.querySelector(`[data-msg-id="${id}"]`);
+  if (targetEl) {
+    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Apply flash highlight animation overlay
+    targetEl.classList.remove('highlight-flash');
+    void targetEl.offsetWidth; // Trigger reflow to restart CSS animation
+    targetEl.classList.add('highlight-flash');
+
+    // Clean up class after animation ends
+    setTimeout(() => {
+      targetEl.classList.remove('highlight-flash');
+    }, 1400);
+  } else {
+    showToast('Mensagem original não carregada no histórico atual.', 'error');
   }
 }
