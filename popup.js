@@ -19,6 +19,21 @@ let currentTabInfo = {
 let activeTags = [];
 let availableLabels = [];
 
+// Conversations state
+let activeChatFilter = 'new';
+let currentActiveChat = null;
+let chatPollInterval = null;
+let fetchedConversations = [];
+let currentAccountId = '';
+
+// Attachments & Voice Recording state
+let pendingAttachments = [];
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingStartTime = 0;
+let recordingTimerInterval = null;
+let replyParentMessageId = null;
+
 // DOM SELECTORS
 const elements = {
   // Tabs
@@ -69,7 +84,22 @@ const elements = {
   
   // Toast
   toast: document.getElementById('toast'),
-  toastMessage: document.querySelector('.toast-message')
+  toastMessage: document.querySelector('.toast-message'),
+
+  // Tab: Conversations
+  chatsSearchInput: document.getElementById('chats-search-input'),
+  chatsList: document.getElementById('chats-list'),
+  chatsListView: document.querySelector('.chats-list-view'),
+  
+  // Tab: Chat Detail
+  chatsDetailView: document.querySelector('.chats-detail-view'),
+  btnChatBack: document.getElementById('btn-chat-back'),
+  chatHeaderAvatar: document.getElementById('chat-header-avatar'),
+  chatHeaderName: document.getElementById('chat-header-name'),
+  chatHeaderMeta: document.getElementById('chat-header-meta'),
+  chatMessagesArea: document.getElementById('chat-messages-area'),
+  chatReplyBar: document.getElementById('chat-reply-bar'),
+  chatReplyInput: document.getElementById('chat-reply-input')
 };
 
 // INITIALIZATION
@@ -100,16 +130,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Sync notifications, reminders, and settings in real-time if storage changes
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local' && changes.chatwootNotifications) {
-      loadNotifications();
-    }
-    if (namespace === 'sync' && changes.chatwootReminders) {
-      loadReminders(elements.searchInput.value);
-    }
-    if (namespace === 'sync' && changes.chatwootSettings) {
-      loadSettings().then(() => {
-        updateConnectionStatus();
-      });
+    if (namespace === 'sync') {
+      if (changes.chatwootNotifications) {
+        loadNotifications();
+        // If we are currently showing the conversations list, reload it
+        const chatsTabActive = document.querySelector('.tab-btn[data-tab="chats"]').classList.contains('active');
+        if (chatsTabActive && !currentActiveChat) {
+          loadConversations();
+        }
+      }
+      if (changes.chatwootReminders) {
+        loadReminders(elements.searchInput.value);
+      }
+      if (changes.chatwootSettings) {
+        loadSettings().then(() => {
+          updateConnectionStatus();
+        });
+      }
     }
   });
   
@@ -142,9 +179,240 @@ document.addEventListener('DOMContentLoaded', async () => {
   elements.newChatPhone.addEventListener('change', lookupContactByPhone);
   elements.newChatAccount.addEventListener('change', lookupContactByPhone);
 
+  // Conversations filters setup
+  const filterChips = document.querySelectorAll('.chats-filter-bar .filter-chip');
+  filterChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      filterChips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      activeChatFilter = chip.getAttribute('data-filter');
+      loadConversations();
+    });
+  });
+
+  // Conversations search input
+  elements.chatsSearchInput.addEventListener('input', () => {
+    filterAndRenderConversations();
+  });
+
+  // Chat back button
+  elements.btnChatBack.addEventListener('click', closeChatView);
+
+  // Chat header action buttons
+  const btnChatReminder = document.getElementById('btn-chat-reminder');
+  if (btnChatReminder) {
+    btnChatReminder.addEventListener('click', createReminderFromActiveChat);
+  }
+
+  const btnChatResolve = document.getElementById('btn-chat-resolve');
+  if (btnChatResolve) {
+    btnChatResolve.addEventListener('click', resolveCurrentConversation);
+  }
+
+  // Chat reply submit
+  elements.chatReplyBar.addEventListener('submit', sendChatMessage);
+
   // Form submission listeners
   elements.saveCurrentForm.addEventListener('submit', handleSaveCurrentSubmit);
   elements.newChatForm.addEventListener('submit', handleNewChatSubmit);
+
+  // Toggle Quick Reminder Form (inside Reminders tab)
+  const btnToggleReminderForm = document.getElementById('btn-toggle-reminder-form');
+  const quickReminderSection = document.getElementById('quick-reminder-section');
+  if (btnToggleReminderForm && quickReminderSection) {
+    btnToggleReminderForm.addEventListener('click', () => {
+      quickReminderSection.classList.toggle('hidden');
+      if (!quickReminderSection.classList.contains('hidden')) {
+        checkActiveTab();
+      }
+    });
+  }
+
+  // Toggle Formatting Toolbar
+  const btnToggleToolbar = document.getElementById('btn-toggle-toolbar');
+  const chatFormatToolbar = document.getElementById('chat-format-toolbar');
+  if (btnToggleToolbar && chatFormatToolbar) {
+    btnToggleToolbar.addEventListener('click', (e) => {
+      e.preventDefault();
+      chatFormatToolbar.classList.toggle('hidden');
+      btnToggleToolbar.classList.toggle('active');
+      
+      // Auto-close emoji picker if toolbar is collapsed
+      if (chatFormatToolbar.classList.contains('hidden')) {
+        const emojiPicker = document.getElementById('emoji-picker');
+        if (emojiPicker) emojiPicker.classList.add('hidden');
+      }
+    });
+  }
+
+  // Formatting toolbar setup
+  const btnFormats = document.querySelectorAll('.btn-format');
+  btnFormats.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const symbol = btn.getAttribute('data-symbol');
+      applyFormatting(elements.chatReplyInput, symbol);
+    });
+  });
+
+  // Emoji picker setup
+  setupEmojiPicker();
+
+  // File upload trigger
+  const btnAttachFile = document.getElementById('btn-attach-file');
+  const chatFileInput = document.getElementById('chat-file-input');
+  if (btnAttachFile && chatFileInput) {
+    btnAttachFile.addEventListener('click', (e) => {
+      e.preventDefault();
+      chatFileInput.click();
+    });
+
+    chatFileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length > 0) {
+        pendingAttachments.push(...files);
+        renderAttachmentsPreview();
+      }
+      chatFileInput.value = ''; // Reset to allow re-selection
+    });
+  }
+
+  // Audio recording trigger & controls
+  const btnAudioRecord = document.getElementById('btn-audio-record');
+  const btnRecordingCancel = document.getElementById('btn-recording-cancel');
+  const btnRecordingSend = document.getElementById('btn-recording-send');
+
+  if (btnAudioRecord) {
+    btnAudioRecord.addEventListener('click', (e) => {
+      e.preventDefault();
+      
+      // Request microphone access
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          startAudioRecording(stream);
+        })
+        .catch(err => {
+          console.error('Microphone access denied:', err);
+          showToast('Solicitando permissão de microfone em nova aba...', 'success');
+          chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
+        });
+    });
+  }
+
+  if (btnRecordingCancel) {
+    btnRecordingCancel.addEventListener('click', (e) => {
+      e.preventDefault();
+      cancelAudioRecording();
+    });
+  }
+
+  if (btnRecordingSend) {
+    btnRecordingSend.addEventListener('click', (e) => {
+      e.preventDefault();
+      stopAndSendAudioRecording();
+    });
+  }
+
+  // Textarea enter key submit & auto-grow (WhatsApp style)
+  function adjustChatReplyInputHeight() {
+    elements.chatReplyInput.style.height = 'auto';
+    elements.chatReplyInput.style.height = `${Math.min(elements.chatReplyInput.scrollHeight, 140)}px`;
+  }
+
+  elements.chatReplyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (!e.shiftKey) {
+        e.preventDefault();
+        elements.chatReplyBar.dispatchEvent(new Event('submit'));
+      } else {
+        // Shift+Enter inserts newline. Request instant height adjustment to avoid lag
+        setTimeout(adjustChatReplyInputHeight, 0);
+      }
+    }
+  });
+
+  elements.chatReplyInput.addEventListener('input', adjustChatReplyInputHeight);
+
+  // Handle paste events (Ctrl+V) for images
+  elements.chatReplyInput.addEventListener('paste', (e) => {
+    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const file = items[i].getAsFile();
+        editingAttachmentIndex = -1; // New attachment from paste
+        openImageEditor(file);
+        e.preventDefault(); // Prevent pasting raw file names/text
+        break;
+      }
+    }
+  });
+
+  // Setup Image Editor drawing events
+  setupCanvasDrawingEvents();
+
+  // Drag and Drop Files handling
+  const dragDropOverlay = document.getElementById('drag-drop-overlay');
+  if (elements.chatsDetailView && dragDropOverlay) {
+    let dragCounter = 0;
+
+    elements.chatsDetailView.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      if (dragCounter === 1) {
+        dragDropOverlay.classList.remove('hidden');
+      }
+    });
+
+    elements.chatsDetailView.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+
+    elements.chatsDetailView.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter === 0) {
+        dragDropOverlay.classList.add('hidden');
+      }
+    });
+
+    elements.chatsDetailView.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      dragDropOverlay.classList.add('hidden');
+
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) {
+        pendingAttachments.push(...files);
+        renderAttachmentsPreview();
+        showToast(`${files.length} arquivo(s) adicionado(s) com sucesso.`, 'success');
+      }
+    });
+  }
+
+  // Load conversations initial state
+  loadConversations();
+
+  // Setup Lightbox Modal events
+  setupLightboxHandlers();
+
+  // Close reply preview bar
+  const btnReplyPreviewClose = document.getElementById('btn-reply-preview-close');
+  if (btnReplyPreviewClose) {
+    btnReplyPreviewClose.addEventListener('click', (e) => {
+      e.preventDefault();
+      cancelMessageReply();
+    });
+  }
+
+  // Dismiss context menu when clicking outside
+  document.addEventListener('click', (e) => {
+    const menu = document.getElementById('msg-context-menu');
+    if (menu && !menu.classList.contains('hidden')) {
+      if (!e.target.closest('.btn-msg-menu') && !e.target.closest('#msg-context-menu')) {
+        menu.classList.add('hidden');
+      }
+    }
+  });
 });
 
 // TAB HANDLING
@@ -164,6 +432,12 @@ function setupTabs() {
 }
 
 function switchTab(tabId) {
+  // Clean polling if leaving chats tab
+  if (tabId !== 'chats' && chatPollInterval) {
+    clearInterval(chatPollInterval);
+    chatPollInterval = null;
+  }
+
   // Update buttons
   elements.tabButtons.forEach(btn => {
     if (btn.getAttribute('data-tab') === tabId) {
@@ -183,7 +457,19 @@ function switchTab(tabId) {
   });
 
   // Action on tab entry
-  if (tabId === 'save-current') {
+  if (tabId === 'chats') {
+    if (currentActiveChat) {
+      // Restore polling if chat view was open
+      loadChatMessages(currentActiveChat.accountId, currentActiveChat.id);
+      chatPollInterval = setInterval(() => {
+        if (currentActiveChat) {
+          loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
+        }
+      }, 4000);
+    } else {
+      loadConversations();
+    }
+  } else if (tabId === 'save-current') {
     checkActiveTab();
   } else if (tabId === 'reminders') {
     loadReminders();
@@ -377,10 +663,13 @@ async function chatwootFetch(endpoint, options = {}) {
 
   const url = `${config.url}${endpoint}`;
   const headers = {
-    'Content-Type': 'application/json',
     'api_access_token': config.token,
     ...(options.headers || {})
   };
+
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const response = await fetch(url, {
     ...options,
@@ -656,8 +945,12 @@ function handleSaveCurrentSubmit(e) {
       activeTags = [];
       renderTags();
       
-      // Redirect to bookmarks tab
-      switchTab('reminders');
+      // Collapse quick reminder section and refresh list
+      const quickReminderSection = document.getElementById('quick-reminder-section');
+      if (quickReminderSection) {
+        quickReminderSection.classList.add('hidden');
+      }
+      loadReminders();
     });
   });
 }
@@ -671,10 +964,10 @@ function loadReminders(searchQuery = '') {
     const query = searchQuery.trim().toLowerCase();
     const filtered = list.filter(item => {
       if (!query) return true;
-      const titleMatch = item.title.toLowerCase().includes(query);
-      const contactMatch = item.contactName.toLowerCase().includes(query);
-      const notesMatch = item.notes.toLowerCase().includes(query);
-      const tagsMatch = item.tags.some(tag => tag.toLowerCase().includes(query));
+      const titleMatch = (item.title || '').toLowerCase().includes(query);
+      const contactMatch = (item.contactName || '').toLowerCase().includes(query);
+      const notesMatch = (item.notes || '').toLowerCase().includes(query);
+      const tagsMatch = Array.isArray(item.tags) && item.tags.some(tag => tag.toLowerCase().includes(query));
       return titleMatch || contactMatch || notesMatch || tagsMatch;
     });
 
@@ -683,13 +976,14 @@ function loadReminders(searchQuery = '') {
         <div class="empty-state">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
           <h3>Nenhum Lembrete Encontrado</h3>
-          <p>${query ? 'Não há lembretes correspondentes à sua busca.' : 'Abra uma conversa no Chatwoot e clique na aba \"Salvar Atual\" para criar seu primeiro lembrete.'}</p>
+          <p>${query ? 'Não há lembretes correspondentes à sua busca.' : 'Abra uma conversa nas suas Conversas para criar seu primeiro lembrete.'}</p>
         </div>
       `;
       return;
     }
 
     filtered.forEach(item => {
+      if (!item) return;
       const card = document.createElement('div');
       card.className = 'reminder-card';
       
@@ -714,7 +1008,7 @@ function loadReminders(searchQuery = '') {
       if (item.alarmTime) {
         const date = new Date(item.alarmTime);
         const dateStr = date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-        const hasPassed = item.alarmTime <= Date.now();
+        const hasPassed = date.getTime() <= Date.now();
         const alarmClass = hasPassed ? 'alarm-tag passed' : 'alarm-tag';
         alarmHtml = `
           <div class="${alarmClass}">
@@ -726,8 +1020,8 @@ function loadReminders(searchQuery = '') {
 
       card.innerHTML = `
         <div class="reminder-header">
-          <a href="#" class="reminder-title-link" data-url="${item.url}">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+          <a href="#" class="reminder-title-link" title="Abrir conversa na extensão">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
             ${item.title}
           </a>
           <button class="btn-delete" data-id="${item.id}" title="Excluir Lembrete">
@@ -744,41 +1038,85 @@ function loadReminders(searchQuery = '') {
         ${alarmHtml}
         ${notesHtml}
         ${tagsHtml}
-        
-        <div class="notification-reply-wrapper">
-          <form class="reminder-reply-form" data-acc="${item.accountId}" data-conv="${item.conversationId}">
-            <input type="text" class="reply-input" placeholder="Digite uma resposta rápida..." required>
-            <button type="submit" class="btn-reply-send">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-              Responder
-            </button>
-          </form>
+
+        <div class="reminder-actions-row" style="margin-top: 12px; display: flex; gap: 8px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+          <!-- Open in Chatwoot (browser tab) -->
+          <button class="btn btn-secondary btn-small btn-open-chatwoot" style="flex: 1; padding: 4px 8px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 4px;" title="Abrir no painel do Chatwoot">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            Abrir Chatwoot
+          </button>
+          
+          <!-- Edit Reminder -->
+          <button class="btn btn-secondary btn-small btn-edit-reminder" style="padding: 4px 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 4px;" title="Editar Lembrete">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+            Editar
+          </button>
         </div>
       `;
 
-      // Add click behavior to open the conversation in a new tab
+      // Open conversation directly in the extension when clicking title link
       card.querySelector('.reminder-title-link').addEventListener('click', (e) => {
         e.preventDefault();
-        chrome.tabs.create({ url: item.url });
+        switchTab('chats');
+        openConversationChat(item.conversationId, item.contactName, item.accountId, item.inboxId || '');
       });
 
-      // Add delete behavior
+      // Open in Chatwoot tab
+      card.querySelector('.btn-open-chatwoot').addEventListener('click', (e) => {
+        e.preventDefault();
+        chrome.tabs.create({ url: item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}` });
+      });
+
+      // Edit Reminder
+      card.querySelector('.btn-edit-reminder').addEventListener('click', (e) => {
+        e.preventDefault();
+        
+        // Pre-populate currentTabInfo with reminder details
+        currentTabInfo.isChatwootConv = true;
+        currentTabInfo.accountId = item.accountId;
+        currentTabInfo.conversationId = item.conversationId;
+        currentTabInfo.contactName = item.contactName;
+        currentTabInfo.inboxId = item.inboxId || '';
+        currentTabInfo.url = item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}`;
+
+        // Populate form inputs
+        elements.saveTitle.value = item.title || '';
+        elements.saveNotes.value = item.notes || '';
+        
+        if (item.alarmTime) {
+          elements.saveAlarmEnable.checked = true;
+          elements.saveAlarmDatetimeWrapper.classList.remove('hidden');
+          elements.saveAlarmDatetime.value = formatTimestampToLocalDatetime(item.alarmTime);
+        } else {
+          elements.saveAlarmEnable.checked = false;
+          elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+          elements.saveAlarmDatetime.value = '';
+        }
+
+        activeTags = Array.isArray(item.tags) ? [...item.tags] : [];
+        renderTags();
+
+        // Show form & hide warning
+        elements.notChatwootWarning.classList.add('hidden');
+        elements.saveCurrentForm.classList.remove('hidden');
+
+        // Scroll to the top of reminders tab where the form is located
+        const tabPane = elements.remindersList.closest('.tab-pane');
+        if (tabPane) tabPane.scrollTop = 0;
+
+        // Open quick reminder form section if closed
+        const quickReminderSection = document.getElementById('quick-reminder-section');
+        if (quickReminderSection) {
+          quickReminderSection.classList.remove('hidden');
+        }
+
+        // Focus title input
+        elements.saveTitle.focus();
+      });
+
+      // Delete behavior
       card.querySelector('.btn-delete').addEventListener('click', () => {
         deleteReminder(item.id);
-      });
-
-      // Add reply behavior
-      card.querySelector('.reminder-reply-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        const form = e.currentTarget;
-        const input = form.querySelector('.reply-input');
-        const btn = form.querySelector('.btn-reply-send');
-        sendReminderReply(
-          form.getAttribute('data-acc'),
-          form.getAttribute('data-conv'),
-          input,
-          btn
-        );
       });
 
       elements.remindersList.appendChild(card);
@@ -786,6 +1124,7 @@ function loadReminders(searchQuery = '') {
     resolveInboxNames();
   });
 }
+
 
 function deleteReminder(id) {
   // Cancel chrome alarm
@@ -921,27 +1260,27 @@ async function handleNewChatSubmit(e) {
       }
     }
 
-    // Redirect user to the new conversation
-    showToast('Redirecionando...', 'success');
-    const targetUrl = `${config.url}/app/accounts/${accountId}/conversations/${conversationId}`;
+    // Open conversation directly inside the extension popup
+    showToast('Abrindo conversa na extensão...', 'success');
+    switchTab('chats');
+    openConversationChat(conversationId, contactName, accountId, inboxId);
     
-    // Update active tab or open new
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs && tabs[0]) {
-        chrome.tabs.update(tabs[0].id, { url: targetUrl });
-      } else {
-        chrome.tabs.create({ url: targetUrl });
-      }
-      
-      // Reset form
-      elements.newChatPhone.value = '';
-      elements.newChatName.value = '';
-      btnSubmit.disabled = false;
-      btnSubmit.innerHTML = origBtnContent;
-      
-      // Close popup automatically
-      setTimeout(() => window.close(), 1000);
-    });
+    // Reset form
+    elements.newChatPhone.value = '';
+    elements.newChatName.value = '';
+    
+    const searchHelper = document.getElementById('new-chat-phone-search-status');
+    if (searchHelper) {
+      searchHelper.textContent = '';
+      searchHelper.className = 'helper-text';
+    }
+    const nameFormGroup = elements.newChatName.closest('.form-group');
+    if (nameFormGroup) {
+      nameFormGroup.classList.remove('hidden');
+    }
+
+    btnSubmit.disabled = false;
+    btnSubmit.innerHTML = origBtnContent;
 
   } catch (err) {
     console.error('Error starting conversation:', err);
@@ -973,141 +1312,178 @@ function showToast(message, type = 'success') {
 // ==========================================
 
 function loadNotifications() {
-  chrome.storage.local.get(['chatwootNotifications'], (result) => {
-    const list = result.chatwootNotifications || [];
-    const unreadList = list.filter(item => !item.read);
-    const unreadCount = unreadList.length;
+  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
+    try {
+      const list = result.chatwootNotifications || [];
+      
+      if (!Array.isArray(list)) {
+        console.warn('[Chatwoot Helper] Saved notifications is not an array:', list);
+        elements.notificationsList.innerHTML = `
+          <div class="empty-state">
+            <h3>Erro de Dados</h3>
+            <p>Os dados de notificações salvos são inválidos. Clique em "Limpar Todas" para redefinir.</p>
+          </div>
+        `;
+        return;
+      }
 
-    // Update Badge in Popup Tab
-    if (unreadCount > 0) {
-      elements.notificationBadge.textContent = unreadCount;
-      elements.notificationBadge.classList.remove('hidden');
-      elements.btnClearAllNotifications.classList.remove('hidden');
-    } else {
-      elements.notificationBadge.classList.add('hidden');
-      elements.btnClearAllNotifications.classList.add('hidden');
-    }
+      const unreadList = list.filter(item => item && !item.read);
+      const unreadCount = unreadList.length;
 
-    elements.notificationsList.innerHTML = '';
+      // Update Badge in Popup Tab
+      if (unreadCount > 0) {
+        elements.notificationBadge.textContent = unreadCount;
+        elements.notificationBadge.classList.remove('hidden');
+        elements.btnClearAllNotifications.classList.remove('hidden');
+      } else {
+        elements.notificationBadge.classList.add('hidden');
+        elements.btnClearAllNotifications.classList.add('hidden');
+      }
 
-    if (list.length === 0) {
+      elements.notificationsList.innerHTML = '';
+
+      if (list.length === 0) {
+        elements.notificationsList.innerHTML = `
+          <div class="empty-state">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+            <h3>Nenhuma mensagem pendente</h3>
+            <p>Tudo limpo por aqui! Novas mensagens recebidas serão exibidas nesta central.</p>
+          </div>
+        `;
+        return;
+      }
+
+      // GROUP MESSAGES BY CONVERSATION
+      const grouped = {};
+      list.forEach(item => {
+        if (!item || !item.conversationId) return;
+        const key = `${item.accountId || 'default'}_${item.conversationId}`;
+        if (!grouped[key]) {
+          grouped[key] = {
+            accountId: item.accountId || '',
+            conversationId: item.conversationId,
+            inboxId: item.inboxId || '',
+            senderName: item.senderName || 'Cliente',
+            latestTimestamp: item.timestamp || Date.now(),
+            messages: []
+          };
+        }
+        grouped[key].messages.push(item);
+        if (item.timestamp && item.timestamp > grouped[key].latestTimestamp) {
+          grouped[key].latestTimestamp = item.timestamp;
+        }
+      });
+
+      const groupedList = Object.values(grouped);
+      // Sort so conversations with the newest messages show first
+      groupedList.sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+
+      groupedList.forEach(group => {
+        const card = document.createElement('div');
+        card.className = 'notification-card';
+        
+        // Calculate relative time for the latest message
+        const timeStr = formatRelativeTime(group.latestTimestamp);
+
+        // Sort messages within the conversation chronologically (oldest first)
+        group.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        // Render individual message bubbles
+        let bubblesHtml = '<div class="notification-bubbles-list">';
+        group.messages.forEach(msg => {
+          if (msg) {
+            bubblesHtml += `<div class="notification-bubble">${msg.content || 'Nova mensagem (mídia/anexo)'}</div>`;
+          }
+        });
+        bubblesHtml += '</div>';
+
+        card.innerHTML = `
+          <div class="notification-header">
+            <div class="notification-sender">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+              ${group.senderName}
+            </div>
+            <span class="notification-time">${timeStr}</span>
+          </div>
+          
+          ${bubblesHtml}
+          
+          <div class="notification-meta">
+            <span>Conversa: #${group.conversationId} <span class="inbox-name-badge" data-acc="${group.accountId}" data-inbox="${group.inboxId}"></span></span>
+            <div class="notification-actions">
+              <button class="btn-action-icon open" title="Abrir no Chatwoot" data-acc="${group.accountId}" data-conv="${group.conversationId}">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              </button>
+              <button class="btn-action-icon delete" title="Excluir Notificações" data-acc="${group.accountId}" data-conv="${group.conversationId}">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="notification-reply-wrapper">
+            <form class="reply-form" data-acc="${group.accountId}" data-conv="${group.conversationId}">
+              <input type="text" class="reply-input" placeholder="Digite uma resposta rápida..." required>
+              <button type="submit" class="btn-reply-send">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                Responder
+              </button>
+            </form>
+          </div>
+        `;
+
+        // Connect button actions
+        card.querySelector('.btn-action-icon.open').addEventListener('click', (e) => {
+          const btn = e.currentTarget;
+          openNotificationConversation(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
+        });
+
+        card.querySelector('.btn-action-icon.delete').addEventListener('click', (e) => {
+          const btn = e.currentTarget;
+          deleteConversationNotifications(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
+        });
+
+        card.querySelector('.reply-form').addEventListener('submit', (e) => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const input = form.querySelector('.reply-input');
+          const btn = form.querySelector('.btn-reply-send');
+          sendQuickReply(
+            form.getAttribute('data-acc'),
+            form.getAttribute('data-conv'),
+            input,
+            btn
+          );
+        });
+
+        elements.notificationsList.appendChild(card);
+      });
+      resolveInboxNames();
+    } catch (err) {
+      console.error('[Chatwoot Helper] Error in loadNotifications:', err);
       elements.notificationsList.innerHTML = `
         <div class="empty-state">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-          <h3>Nenhuma mensagem pendente</h3>
-          <p>Tudo limpo por aqui! Novas mensagens recebidas serão exibidas nesta central.</p>
+          <h3>Erro ao Carregar</h3>
+          <p>Ocorreu um erro ao renderizar as mensagens pendentes: ${err.message}</p>
         </div>
       `;
-      return;
     }
-
-    // GROUP MESSAGES BY CONVERSATION
-    const grouped = {};
-    list.forEach(item => {
-      const key = `${item.accountId}_${item.conversationId}`;
-      if (!grouped[key]) {
-        grouped[key] = {
-          accountId: item.accountId,
-          conversationId: item.conversationId,
-          inboxId: item.inboxId || '',
-          senderName: item.senderName,
-          latestTimestamp: item.timestamp,
-          messages: []
-        };
-      }
-      grouped[key].messages.push(item);
-      if (item.timestamp > grouped[key].latestTimestamp) {
-        grouped[key].latestTimestamp = item.timestamp;
-      }
-    });
-
-    const groupedList = Object.values(grouped);
-    // Sort so conversations with the newest messages show first
-    groupedList.sort((a, b) => b.latestTimestamp - a.latestTimestamp);
-
-    groupedList.forEach(group => {
-      const card = document.createElement('div');
-      card.className = 'notification-card';
-      
-      // Calculate relative time for the latest message
-      const timeStr = formatRelativeTime(group.latestTimestamp);
-
-      // Sort messages within the conversation chronologically (oldest first)
-      group.messages.sort((a, b) => a.timestamp - b.timestamp);
-
-      // Render individual message bubbles
-      let bubblesHtml = '<div class="notification-bubbles-list">';
-      group.messages.forEach(msg => {
-        bubblesHtml += `<div class="notification-bubble">${msg.content}</div>`;
-      });
-      bubblesHtml += '</div>';
-
-      card.innerHTML = `
-        <div class="notification-header">
-          <div class="notification-sender">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-            ${group.senderName}
-          </div>
-          <span class="notification-time">${timeStr}</span>
-        </div>
-        
-        ${bubblesHtml}
-        
-        <div class="notification-meta">
-          <span>Conversa: #${group.conversationId} <span class="inbox-name-badge" data-acc="${group.accountId}" data-inbox="${group.inboxId}"></span></span>
-          <div class="notification-actions">
-            <button class="btn-action-icon open" title="Abrir no Chatwoot" data-acc="${group.accountId}" data-conv="${group.conversationId}">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-            </button>
-            <button class="btn-action-icon delete" title="Excluir Notificações" data-acc="${group.accountId}" data-conv="${group.conversationId}">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            </button>
-          </div>
-        </div>
-        
-        <div class="notification-reply-wrapper">
-          <form class="reply-form" data-acc="${group.accountId}" data-conv="${group.conversationId}">
-            <input type="text" class="reply-input" placeholder="Digite uma resposta rápida..." required>
-            <button type="submit" class="btn-reply-send">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-              Responder
-            </button>
-          </form>
-        </div>
-      `;
-
-      // Connect button actions
-      card.querySelector('.btn-action-icon.open').addEventListener('click', (e) => {
-        const btn = e.currentTarget;
-        openNotificationConversation(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
-      });
-
-      card.querySelector('.btn-action-icon.delete').addEventListener('click', (e) => {
-        const btn = e.currentTarget;
-        deleteConversationNotifications(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
-      });
-
-      card.querySelector('.reply-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        const form = e.currentTarget;
-        const input = form.querySelector('.reply-input');
-        const btn = form.querySelector('.btn-reply-send');
-        sendQuickReply(
-          form.getAttribute('data-acc'),
-          form.getAttribute('data-conv'),
-          input,
-          btn
-        );
-      });
-
-      elements.notificationsList.appendChild(card);
-    });
-    resolveInboxNames();
   });
 }
 
+function formatTimestampToLocalDatetime(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const tzOffset = date.getTimezoneOffset() * 60000; // offset in milliseconds
+  const localISOTime = (new Date(date - tzOffset)).toISOString().slice(0, 16);
+  return localISOTime;
+}
+
 function formatRelativeTime(timestamp) {
+  if (!timestamp || isNaN(Number(timestamp))) return 'data desconhecida';
+  
   const diffMs = Date.now() - timestamp;
+  if (isNaN(diffMs)) return 'data desconhecida';
+  
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMins / 60);
 
@@ -1117,16 +1493,17 @@ function formatRelativeTime(timestamp) {
   
   // Default date format
   const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return 'data desconhecida';
   return date.toLocaleDateString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
 function deleteConversationNotifications(accountId, conversationId) {
-  chrome.storage.local.get(['chatwootNotifications'], (result) => {
+  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
     const list = result.chatwootNotifications || [];
     const filteredList = list.filter(item => 
       !(item.accountId == accountId && item.conversationId == conversationId)
     );
-    chrome.storage.local.set({ chatwootNotifications: filteredList }, () => {
+    chrome.storage.sync.set({ chatwootNotifications: filteredList }, () => {
       // Update action badge
       chrome.action.setBadgeText({ text: filteredList.length > 0 ? String(filteredList.length) : '' });
       loadNotifications();
@@ -1135,7 +1512,7 @@ function deleteConversationNotifications(accountId, conversationId) {
 }
 
 function clearAllNotifications() {
-  chrome.storage.local.set({ chatwootNotifications: [] }, () => {
+  chrome.storage.sync.set({ chatwootNotifications: [] }, () => {
     chrome.action.setBadgeText({ text: '' });
     loadNotifications();
     showToast('Todas as notificações limpas.', 'success');
@@ -1265,6 +1642,23 @@ async function getInboxName(accountId, inboxId) {
   return '';
 }
 
+function getInboxColorStyles(inboxName) {
+  const str = String(inboxName);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  
+  // Consistent color hue based on inbox name (using HSL)
+  const hue = Math.abs(hash) % 360;
+  
+  return {
+    bg: `hsla(${hue}, 65%, 45%, 0.18)`,
+    border: `hsla(${hue}, 65%, 50%, 0.35)`,
+    text: `hsl(${hue}, 85%, 72%)`
+  };
+}
+
 function resolveInboxNames() {
   const elementsToResolve = document.querySelectorAll('.inbox-name-badge:not(.resolved)');
   elementsToResolve.forEach(async (el) => {
@@ -1274,7 +1668,22 @@ function resolveInboxNames() {
       el.classList.add('resolved');
       const name = await getInboxName(accId, inboxId);
       if (name) {
-        el.textContent = `(${name})`;
+        el.textContent = name.toUpperCase();
+        
+        // Generate and apply dynamic HSL color styles based on inbox name
+        const colors = getInboxColorStyles(name);
+        el.style.backgroundColor = colors.bg;
+        el.style.color = colors.text;
+        el.style.borderColor = colors.border;
+        el.style.borderStyle = 'solid';
+        el.style.borderWidth = '1px';
+        el.style.padding = '1px 6px';
+        el.style.borderRadius = '4px';
+        el.style.fontSize = '9px';
+        el.style.fontWeight = '700';
+        el.style.marginLeft = '6px';
+        el.style.display = 'inline-block';
+        el.style.letterSpacing = '0.02em';
       }
     }
   });
@@ -1405,5 +1814,1810 @@ function updateInboxWarning(selectEl) {
     elements.inboxWarning.classList.remove('hidden');
   } else {
     elements.inboxWarning.classList.add('hidden');
+  }
+}
+
+// ==========================================
+// CONVERSATIONS & CHAT THREAD FUNCTIONS
+// ==========================================
+
+function extractConversationsArray(response) {
+  if (!response) return [];
+  if (Array.isArray(response)) return response;
+  if (Array.isArray(response.payload)) return response.payload;
+  if (response.payload && Array.isArray(response.payload.conversations)) return response.payload.conversations;
+  if (Array.isArray(response.conversations)) return response.conversations;
+  if (Array.isArray(response.data)) return response.data;
+  if (response.data && Array.isArray(response.data.conversations)) return response.data.conversations;
+
+  // Search all keys of the object for an array
+  for (const key of Object.keys(response)) {
+    if (Array.isArray(response[key])) {
+      return response[key];
+    }
+    if (response[key] && typeof response[key] === 'object') {
+      for (const subKey of Object.keys(response[key])) {
+        if (Array.isArray(response[key][subKey])) {
+          return response[key][subKey];
+        }
+      }
+    }
+  }
+  return [];
+}
+
+async function loadConversations() {
+  if (!config.url || !config.token) {
+    elements.chatsList.innerHTML = `
+      <div class="empty-state">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path></svg>
+        <h3>Configurações Ausentes</h3>
+        <p>Por favor, vá para a aba de Ajustes e configure sua URL e Token da API.</p>
+      </div>
+    `;
+    return;
+  }
+
+  elements.chatsList.innerHTML = '<div style="text-align:center; padding: 20px; color:var(--text-secondary);">Carregando conversas...</div>';
+
+  try {
+    let accountId = config.defaultAccount;
+    if (!accountId) {
+      const profile = await chatwootFetch('/api/v1/profile');
+      if (profile && profile.accounts && profile.accounts.length > 0) {
+        accountId = profile.accounts[0].id;
+      }
+    }
+
+    if (!accountId) {
+      elements.chatsList.innerHTML = `
+        <div class="empty-state">
+          <h3>Nenhuma Conta Encontrada</h3>
+          <p>Não foi possível encontrar uma conta válida para o seu perfil.</p>
+        </div>
+      `;
+      return;
+    }
+
+    currentAccountId = accountId;
+    
+    // For 'resolved' filter, query resolved conversations. Otherwise, query open/active ones.
+    const statusParam = activeChatFilter === 'resolved' ? 'resolved' : 'open';
+    const endpoint = `/api/v1/accounts/${accountId}/conversations?status=${statusParam}&assignee_type=all`;
+    const response = await chatwootFetch(endpoint);
+    
+    fetchedConversations = extractConversationsArray(response);
+    
+    fetchedConversations.sort((a, b) => {
+      if (!a || !b) return 0;
+      const timeA = a.last_activity_at || a.timestamp || 0;
+      const timeB = b.last_activity_at || b.timestamp || 0;
+      return timeB - timeA;
+    });
+
+    filterAndRenderConversations();
+  } catch (err) {
+    console.error('Error loading conversations:', err);
+    elements.chatsList.innerHTML = `
+      <div class="empty-state">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        <h3>Erro ao Carregar</h3>
+        <p>${err.message || 'Erro ao conectar à API do Chatwoot.'}</p>
+      </div>
+    `;
+  }
+}
+
+function filterAndRenderConversations() {
+  try {
+    const query = elements.chatsSearchInput.value.trim().toLowerCase();
+    
+    const filtered = fetchedConversations.filter(item => {
+      if (!item) return false;
+      
+      // Stage-based filters (New vs In Progress)
+      // New: status is active AND first_reply_created_at is null/empty
+      // In Progress: status is active AND first_reply_created_at is set
+      if (activeChatFilter === 'new') {
+        if (item.first_reply_created_at) return false;
+      } else if (activeChatFilter === 'progress') {
+        if (!item.first_reply_created_at) return false;
+      }
+      
+      if (!query) return true;
+      const contactName = (item.meta?.sender?.name || '').toLowerCase();
+      const lastMsgContent = (Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1]?.content || '' : '').toLowerCase();
+      return contactName.includes(query) || lastMsgContent.includes(query);
+    });
+
+    renderConversationsList(filtered, currentAccountId);
+  } catch (err) {
+    console.error('Error filtering conversations:', err);
+    elements.chatsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Erro ao Renderizar</h3>
+        <p>Ocorreu um erro ao filtrar as conversas: ${err.message}</p>
+      </div>
+    `;
+  }
+}
+
+function renderConversationsList(conversations, accountId) {
+  try {
+    elements.chatsList.innerHTML = '';
+
+    if (conversations.length === 0) {
+      elements.chatsList.innerHTML = `
+        <div class="empty-state">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          <h3>Nenhuma Conversa</h3>
+          <p>Não há conversas abertas correspondentes ao filtro atual.</p>
+        </div>
+      `;
+      return;
+    }
+
+    conversations.forEach(item => {
+      if (!item) return;
+      const contactName = item.meta?.sender?.name || 'Cliente';
+      const initials = contactName.split(' ').map(n => n[0]).join('').substring(0, 2);
+      
+      const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
+      let lastMsgText = 'Nova conversa criada';
+      if (lastMsgObj) {
+        lastMsgText = lastMsgObj.content || 'Nova mensagem (mídia/anexo)';
+      }
+
+      const timestamp = item.last_activity_at || item.timestamp;
+      const timeStr = timestamp ? formatRelativeTime(timestamp * 1000) : '';
+
+      const isUnread = item.unread_count > 0;
+      const itemClass = isUnread ? 'chat-item unread' : 'chat-item';
+
+      const card = document.createElement('div');
+      card.className = itemClass;
+      card.setAttribute('data-id', item.id);
+      
+      card.innerHTML = `
+        <div class="chat-item-avatar">${initials}</div>
+        <div class="chat-item-content">
+          <div class="chat-item-top">
+            <span class="chat-item-name">${contactName}</span>
+            <span class="chat-item-time">${timeStr}</span>
+          </div>
+          <div class="chat-item-bottom">
+            <span class="chat-item-msg">${lastMsgText}</span>
+            <div class="chat-item-meta">
+              <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
+              ${isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        openConversationChat(item.id, contactName, accountId, item.inbox_id);
+      });
+
+      elements.chatsList.appendChild(card);
+    });
+
+    resolveInboxNames();
+  } catch (err) {
+    console.error('Error rendering conversations list:', err);
+    elements.chatsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Erro ao Renderizar</h3>
+        <p>Ocorreu um erro ao construir a lista de conversas: ${err.message}</p>
+      </div>
+    `;
+  }
+}
+
+
+
+function openConversationChat(conversationId, contactName, accountId, inboxId) {
+  // Collapse formatting toolbar and emoji picker by default
+  const chatFormatToolbar = document.getElementById('chat-format-toolbar');
+  if (chatFormatToolbar) chatFormatToolbar.classList.add('hidden');
+  const btnToggleToolbar = document.getElementById('btn-toggle-toolbar');
+  if (btnToggleToolbar) btnToggleToolbar.classList.remove('active');
+  const emojiPicker = document.getElementById('emoji-picker');
+  if (emojiPicker) emojiPicker.classList.add('hidden');
+
+  currentActiveChat = {
+    id: conversationId,
+    contactName: contactName,
+    accountId: accountId,
+    inboxId: inboxId
+  };
+
+  elements.chatHeaderName.textContent = contactName;
+  elements.chatHeaderAvatar.textContent = contactName.split(' ').map(n => n[0]).join('').substring(0, 2);
+  elements.chatHeaderMeta.textContent = 'Carregando caixa de entrada...';
+  
+  getInboxName(accountId, inboxId).then(inboxName => {
+    if (inboxName && currentActiveChat && currentActiveChat.id === conversationId) {
+      elements.chatHeaderMeta.textContent = inboxName;
+    }
+  });
+
+  // Mark conversation as read in Chatwoot
+  chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}/update_last_seen`, {
+    method: 'POST'
+  }).catch(err => {
+    console.error('Error marking conversation as read:', err);
+  });
+
+  // Update local model unread count
+  if (Array.isArray(fetchedConversations)) {
+    const conversation = fetchedConversations.find(c => c && c.id === conversationId);
+    if (conversation) {
+      conversation.unread_count = 0;
+    }
+  }
+
+  // Instantly remove unread visual indicators from the DOM
+  const chatItemEl = elements.chatsList.querySelector(`.chat-item[data-id="${conversationId}"]`);
+  if (chatItemEl) {
+    chatItemEl.classList.remove('unread');
+    const badgeEl = chatItemEl.querySelector('.chat-item-badge');
+    if (badgeEl) {
+      badgeEl.remove();
+    }
+  }
+
+  elements.chatMessagesArea.innerHTML = '<div style="text-align:center; padding: 20px; color:var(--text-secondary);">Carregando histórico...</div>';
+
+  elements.chatsListView.classList.add('hidden');
+  elements.chatsDetailView.classList.remove('hidden');
+
+  loadChatMessages(accountId, conversationId);
+
+  if (chatPollInterval) {
+    clearInterval(chatPollInterval);
+  }
+  chatPollInterval = setInterval(() => {
+    if (currentActiveChat && currentActiveChat.id === conversationId) {
+      loadChatMessages(accountId, conversationId, true);
+    }
+  }, 4000);
+}
+
+async function loadChatMessages(accountId, conversationId, silent = false) {
+  try {
+    const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+    const response = await chatwootFetch(endpoint);
+    const messages = Array.isArray(response) ? response : (response?.payload || []);
+    
+    messages.sort((a, b) => {
+      const timeA = a.created_at || 0;
+      const timeB = b.created_at || 0;
+      return timeA - timeB;
+    });
+
+    renderChatMessages(messages, silent);
+  } catch (err) {
+    console.error('Error loading chat messages:', err);
+    if (!silent) {
+      elements.chatMessagesArea.innerHTML = `<div style="text-align:center; padding:20px; color:var(--danger);">Erro ao carregar mensagens: ${err.message}</div>`;
+    }
+  }
+}
+
+function renderChatMessages(messages, silent) {
+  const isNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 50;
+  let messagesHtml = '';
+  
+  if (messages.length === 0) {
+    messagesHtml = '<div style="text-align:center; padding:20px; color:var(--text-muted);">Nenhuma mensagem nesta conversa.</div>';
+  } else {
+    messages.forEach(msg => {
+      const type = msg.message_type;
+      
+      let bubbleClass = 'chat-msg-bubble';
+      if (type === 0 || type === 'incoming') {
+        bubbleClass += ' incoming';
+      } else if (type === 1 || type === 'outgoing' || type === 3 || type === 'template') {
+        bubbleClass += ' outgoing';
+      } else {
+        bubbleClass += ' activity';
+      }
+
+      let timeStr = '';
+      if (msg.created_at) {
+        const date = new Date(msg.created_at * 1000);
+        timeStr = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      }
+
+      let contentHtml = '';
+      if (msg.content) {
+        contentHtml = `<span class="chat-msg-text">${formatWhatsAppMarkdown(msg.content)}</span>`;
+      }
+
+      // Render attachments (images, video players, audio players, files)
+      if (msg.attachments && msg.attachments.length > 0) {
+        msg.attachments.forEach(att => {
+          const filename = att.file_name || (att.data_url ? att.data_url.split('/').pop() : 'arquivo');
+          
+          if (att.file_type === 'image') {
+            contentHtml += `
+              <div class="msg-attachment image-attachment" style="margin-top: 4px;">
+                <img src="${att.data_url}" alt="Imagem" class="chat-img-preview" style="max-width: 100%; max-height: 180px; border-radius: 6px; cursor: pointer; object-fit: cover;" data-filename="${filename}">
+              </div>
+            `;
+          } else if (att.file_type === 'video') {
+            contentHtml += `
+              <div class="msg-attachment video-attachment" style="margin-top: 4px; position: relative;">
+                <video src="${att.data_url}" controls class="chat-video-preview" style="max-width: 100%; max-height: 180px; border-radius: 6px; display: block;"></video>
+                <button type="button" class="btn-video-fullscreen" data-url="${att.data_url}" data-filename="${filename}" style="position: absolute; top: 6px; right: 6px; background: rgba(10,15,30,0.7); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: white;" title="Tela Cheia">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                </button>
+              </div>
+            `;
+          } else if (att.file_type === 'audio') {
+            contentHtml += `
+              <div class="msg-attachment audio-attachment" style="margin-top: 4px; min-width: 185px; display: flex; align-items: center; gap: 6px;">
+                <audio src="${att.data_url}" controls class="chat-audio-preview" style="flex: 1; height: 28px;"></audio>
+                <button type="button" class="btn-audio-speed" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 10px; font-size: 9.5px; padding: 2px 4px; cursor: pointer; font-weight: bold; flex-shrink: 0; min-width: 26px; line-height: 1; text-align: center;">1x</button>
+              </div>
+            `;
+          } else {
+            contentHtml += `
+              <div class="msg-attachment file-attachment" style="margin-top: 6px;">
+                <a href="#" class="chat-file-download-link" data-url="${att.data_url}" data-filename="${filename}" style="display: flex; align-items: center; gap: 6px; color: var(--success); text-decoration: none; font-size: 11px; background: var(--bg-tertiary); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-color);">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                  Visualizar Documento
+                </a>
+              </div>
+            `;
+          }
+        });
+      }
+
+      // If both text and attachments are empty, show empty message placeholder
+      if (!msg.content && (!msg.attachments || msg.attachments.length === 0)) {
+        contentHtml = `<span class="chat-msg-text" style="font-style: italic; color: var(--text-muted);">Mensagem vazia/anexo indisponível</span>`;
+      }
+
+      let quoteHtml = '';
+      if (msg.parent_message) {
+        let senderName = 'Agente';
+        if (msg.parent_message.sender) {
+          senderName = msg.parent_message.sender.name || 'Contato';
+        } else if (msg.parent_message.message_type === 'incoming') {
+          senderName = currentTabInfo.contactName || 'Contato';
+        }
+        quoteHtml = `
+          <div class="chat-msg-reply-quote">
+            <span class="reply-quote-sender">${senderName}</span>
+            <span class="reply-quote-text">${msg.parent_message.content || 'Mensagem de Mídia/Anexo'}</span>
+          </div>
+        `;
+      }
+
+      if (bubbleClass.includes('activity')) {
+        messagesHtml += `
+          <div class="${bubbleClass}">
+            ${contentHtml}
+          </div>
+        `;
+      } else {
+        const senderName = msg.sender ? msg.sender.name : (type === 0 || type === 'incoming' ? (currentTabInfo.contactName || 'Contato') : 'Você');
+        const cleanContent = (msg.content || '').replace(/"/g, '&quot;');
+        messagesHtml += `
+          <div class="${bubbleClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
+            <button type="button" class="btn-msg-menu" title="Opções da mensagem">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+            ${quoteHtml}
+            ${contentHtml}
+            <span class="chat-msg-time">${timeStr}</span>
+          </div>
+        `;
+      }
+    });
+  }
+
+  if (elements.chatMessagesArea.innerHTML !== messagesHtml) {
+    // Check if any audio or video player is currently active/playing to avoid cutting it off
+    const playingMedias = elements.chatMessagesArea.querySelectorAll('audio, video');
+    const isAnyPlaying = Array.from(playingMedias).some(media => !media.paused && media.currentTime > 0 && !media.ended);
+    
+    if (isAnyPlaying) {
+      return; // Defer DOM update until playback finishes or pauses
+    }
+
+    elements.chatMessagesArea.innerHTML = messagesHtml;
+    
+    if (!silent || isNearBottom) {
+      elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
+    }
+  }
+}
+
+function closeChatView() {
+  if (chatPollInterval) {
+    clearInterval(chatPollInterval);
+    chatPollInterval = null;
+  }
+  currentActiveChat = null;
+  cancelMessageReply();
+  elements.chatReplyInput.value = '';
+  
+  // Collapse formatting toolbar and emoji picker
+  const chatFormatToolbar = document.getElementById('chat-format-toolbar');
+  if (chatFormatToolbar) chatFormatToolbar.classList.add('hidden');
+  const btnToggleToolbar = document.getElementById('btn-toggle-toolbar');
+  if (btnToggleToolbar) btnToggleToolbar.classList.remove('active');
+  const emojiPicker = document.getElementById('emoji-picker');
+  if (emojiPicker) emojiPicker.classList.add('hidden');
+
+  elements.chatsDetailView.classList.add('hidden');
+  elements.chatsListView.classList.remove('hidden');
+  loadConversations();
+}
+
+function createReminderFromActiveChat() {
+  if (!currentActiveChat) return;
+
+  const { id: conversationId, accountId, contactName, inboxId } = currentActiveChat;
+
+  // Pre-populate currentTabInfo with active chat data to bypass browser tab URL checking
+  currentTabInfo.isChatwootConv = true;
+  currentTabInfo.accountId = accountId;
+  currentTabInfo.conversationId = conversationId;
+  currentTabInfo.contactName = contactName;
+  currentTabInfo.inboxId = inboxId || '';
+  currentTabInfo.url = `${config.url}/app/accounts/${accountId}/conversations/${conversationId}`;
+
+  // Update DOM fields in the reminder widget
+  elements.currentConvDisplay.querySelector('.conv-id').textContent = `ID: #${conversationId}`;
+  elements.currentConvDisplay.querySelector('.conv-url').textContent = currentTabInfo.url;
+  elements.saveContactInfo.innerHTML = `Contato: <span class="highlight">${contactName}</span>`;
+  elements.saveTitle.value = `Retornar com ${contactName}`;
+
+  // Reset fields
+  elements.saveNotes.value = '';
+  elements.saveAlarmEnable.checked = false;
+  elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+  elements.saveAlarmDatetime.value = '';
+  activeTags = [];
+  renderTags();
+
+  // Show form, hide warning
+  elements.notChatwootWarning.classList.add('hidden');
+  elements.saveCurrentForm.classList.remove('hidden');
+
+  // Switch to Reminders tab
+  switchTab('reminders');
+
+  // Expand the quick reminder section
+  const quickReminderSection = document.getElementById('quick-reminder-section');
+  if (quickReminderSection) {
+    quickReminderSection.classList.remove('hidden');
+  }
+
+  // Focus title input
+  elements.saveTitle.focus();
+}
+
+async function resolveCurrentConversation() {
+  if (!currentActiveChat) return;
+
+  const { id: conversationId, accountId, contactName } = currentActiveChat;
+  
+  if (!confirm(`Deseja realmente finalizar a conversa com ${contactName}?`)) {
+    return;
+  }
+
+  const btnResolve = document.getElementById('btn-chat-resolve');
+  if (btnResolve) btnResolve.disabled = true;
+
+  try {
+    const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/toggle_status`;
+    await chatwootFetch(endpoint, {
+      method: 'POST',
+      body: JSON.stringify({ status: 'resolved' })
+    });
+
+    showToast('Conversa finalizada com sucesso!', 'success');
+    closeChatView();
+  } catch (err) {
+    console.error('Error resolving conversation:', err);
+    showToast(`Erro ao finalizar conversa: ${err.message}`, 'error');
+  } finally {
+    if (btnResolve) btnResolve.disabled = false;
+  }
+}
+
+async function sendChatMessage(e) {
+  e.preventDefault();
+  
+  if (!currentActiveChat) return;
+  const replyText = elements.chatReplyInput.value.trim();
+  
+  // Prevent sending empty messages
+  if (!replyText && pendingAttachments.length === 0) return;
+
+  const { id: conversationId, accountId } = currentActiveChat;
+  
+  elements.chatReplyInput.disabled = true;
+  const sendBtn = elements.chatReplyBar.querySelector('button[type="submit"]');
+  if (sendBtn) sendBtn.disabled = true;
+
+  try {
+    const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+    
+    let bodyData;
+    if (pendingAttachments.length > 0) {
+      bodyData = new FormData();
+      bodyData.append('message_type', 'outgoing');
+      bodyData.append('private', 'false');
+      bodyData.append('content', replyText || ''); // Always append content parameter
+      if (replyParentMessageId) {
+        bodyData.append('parent_id', replyParentMessageId);
+      }
+      pendingAttachments.forEach(file => {
+        bodyData.append('attachments[]', file, file.name);
+      });
+    } else {
+      const payload = {
+        content: replyText,
+        message_type: 'outgoing',
+        private: false
+      };
+      if (replyParentMessageId) {
+        payload.parent_id = replyParentMessageId;
+      }
+      bodyData = JSON.stringify(payload);
+    }
+
+    await chatwootFetch(endpoint, {
+      method: 'POST',
+      body: bodyData
+    });
+
+    elements.chatReplyInput.value = '';
+    elements.chatReplyInput.style.height = 'auto'; // Reset textarea height
+    
+    // Clear pending attachments & replies
+    pendingAttachments = [];
+    renderAttachmentsPreview();
+    cancelMessageReply();
+    
+    await loadChatMessages(accountId, conversationId, true);
+  } catch (err) {
+    console.error('Error sending message:', err);
+    showToast(`Erro ao enviar: ${err.message}`, 'error');
+  } finally {
+    elements.chatReplyInput.disabled = false;
+    if (sendBtn) sendBtn.disabled = false;
+    elements.chatReplyInput.focus();
+  }
+}
+
+// ==========================================
+// EMOJI & TEXT FORMATTING SYSTEM
+// ==========================================
+
+const EMOJI_CATEGORIES = {
+  recent: { name: 'Recentes', icon: '🕒', list: [] },
+  smileys: {
+    name: 'Smileys e pessoas',
+    icon: '😀',
+    list: [
+      { char: '😀', keywords: 'sorriso alegre feliz risada smile happy face' },
+      { char: '😃', keywords: 'sorriso alegre feliz risada smile happy face' },
+      { char: '😄', keywords: 'sorriso alegre feliz risada smile happy face' },
+      { char: '😁', keywords: 'sorriso dentes alegre feliz risada smile happy face' },
+      { char: '😆', keywords: 'sorriso riso alegre feliz risada smile happy face' },
+      { char: '😅', keywords: 'suor frio alegre feliz risada smile sweat happy' },
+      { char: '😂', keywords: 'chorar de rir chorando gargalhada riso cry laugh tears' },
+      { char: '🤣', keywords: 'rolar de rir gargalhada riso cry laugh rofl' },
+      { char: '😊', keywords: 'sorriso corado timido feliz smile blush happy' },
+      { char: '😇', keywords: 'anjo inocente feliz angel halo' },
+      { char: '🙂', keywords: 'sorriso leve smile slight' },
+      { char: '🙃', keywords: 'cabeça para baixo invertido upside down' },
+      { char: '😉', keywords: 'piscando piscadela wink' },
+      { char: '😌', keywords: 'aliviado calmo relived calm' },
+      { char: '😍', keywords: 'olhos de coraçao amor apaixonado love eyes heart' },
+      { char: '🥰', keywords: 'apaixonado amor coraçao love face hearts' },
+      { char: '😘', keywords: 'beijo coraçao amor kiss blow' },
+      { char: '😗', keywords: 'beijo kiss' },
+      { char: '😙', keywords: 'beijo kiss smile eyes' },
+      { char: '😚', keywords: 'beijo fechado kiss closed eyes' },
+      { char: '😋', keywords: 'delicioso gostoso comida nham yum tongue delicious' },
+      { char: '😛', keywords: 'lingua smile tongue' },
+      { char: '😝', keywords: 'lingua fechada tongue closed eyes' },
+      { char: '😜', keywords: 'lingua piscando wink tongue' },
+      { char: '🤪', keywords: 'louco zangado crazy goofy' },
+      { char: '🤨', keywords: 'sobrancelha desconfiado raised eyebrow' },
+      { char: '🧐', keywords: 'monoculo intelectual monocle' },
+      { char: '🤓', keywords: 'nerd inteligente nerd' },
+      { char: '😎', keywords: 'oculos escuros legal descolado cool sunglasses' },
+      { char: '🤩', keywords: 'estrela olhos star eyes' },
+      { char: '🥳', keywords: 'festa comemoraçao party celebrate' },
+      { char: '😏', keywords: 'sorriso malicioso safado smirk' },
+      { char: '😒', keywords: 'descontente chateado unamused' },
+      { char: '😞', keywords: 'decepcionado triste disappointed sad' },
+      { char: '😔', keywords: 'pensativo triste pensive sad' },
+      { char: '😟', keywords: 'preocupado triste worried sad' },
+      { char: '😕', keywords: 'confuso confused' },
+      { char: '🙁', keywords: 'triste slight frown' },
+      { char: '☹️', keywords: 'muito triste frown' },
+      { char: '😣', keywords: 'perseverante persevering' },
+      { char: '😖', keywords: 'confuso chateado confounded' },
+      { char: '😫', keywords: 'cansado tired' },
+      { char: '😩', keywords: 'exausto weary' },
+      { char: '🥺', keywords: 'pedinte implorando fofo plead eyes' },
+      { char: '😢', keywords: 'choro triste lagrima cry sad tear' },
+      { char: '😭', keywords: 'choro alto desespero lagrimas cry loud sob' },
+      { char: '😤', keywords: 'triunfo raiva sopro steam nose' },
+      { char: '😠', keywords: 'bravo com raiva angry' },
+      { char: '😡', keywords: 'muito bravo com raiva vermelho pout angry' },
+      { char: '🤬', keywords: 'xingando palavrao boca angry swear symbols' },
+      { char: '🤯', keywords: 'mente explodindo cabeca explode mind' },
+      { char: '😳', keywords: 'corado surpreso vergonha flushed' },
+      { char: '🥵', keywords: 'calor quente vermelho hot sweat' },
+      { char: '🥶', keywords: 'frio azul congelado cold ice' },
+      { char: '😱', keywords: 'panico grito susto medo scream fear' },
+      { char: '😨', keywords: 'medo temeroso fearful' },
+      { char: '😰', keywords: 'preocupado suor azul anxious sweat' },
+      { char: '😥', keywords: 'alivio triste lagrima sad relieved' },
+      { char: '😓', keywords: 'suor frio desapontado sweat' },
+      { char: '🤗', keywords: 'abraço hug' },
+      { char: '🤔', keywords: 'pensando duvida thinking' },
+      { char: '🤭', keywords: 'risada mao na boca hand mouth' },
+      { char: '🤫', keywords: 'silencio shush quiet' },
+      { char: '🤥', keywords: 'mentiroso pinocquio liar nose' },
+      { char: '😐', keywords: 'neutro neutral' },
+      { char: '😑', keywords: 'sem expressao expressionless' },
+      { char: '😬', keywords: 'careta tenso grimace' },
+      { char: '🙄', keywords: 'olhos rolando desdem roll eyes' },
+      { char: '😴', keywords: 'dormindo zzz sleep' },
+      { char: '💩', keywords: 'coco bosta poop shit' },
+      { char: 'ghost', keywords: 'fantasma ghost halloween' },
+      { char: '💀', keywords: 'caveira morte skull death' },
+      { char: '👽', keywords: 'alien et alien extraterrestrial' },
+      { char: '🤖', keywords: 'robo robot' }
+    ]
+  },
+  gestures: {
+    name: 'Mãos e gestos',
+    icon: '👋',
+    list: [
+      { char: '👋', keywords: 'tchau aceno wave hand hello' },
+      { char: '🤚', keywords: 'mao levantada costas backhand raised' },
+      { char: '🖐️', keywords: 'mao aberta dedos espalmados hand fingers' },
+      { char: '✋', keywords: 'mao aberta parar stop hand' },
+      { char: '🖖', keywords: 'saudaçao vulcana spock live long prosper' },
+      { char: '👌', keywords: 'ok combinado perfeito correct' },
+      { char: '✌️', keywords: 'paz amor vitoria victory peace' },
+      { char: '🤞', keywords: 'dedos cruzados sorte crossed fingers luck' },
+      { char: '🤟', keywords: 'te amo amor love rock' },
+      { char: '🤘', keywords: 'rock chifrinho metal sign' },
+      { char: '🤙', keywords: 'liga nois telefone shaka call' },
+      { char: '👈', keywords: 'apontar esquerda point left' },
+      { char: '👉', keywords: 'apontar direita point right' },
+      { char: '👆', keywords: 'apontar cima point up' },
+      { char: '👇', keywords: 'apontar baixo point down' },
+      { char: '👍', keywords: 'joia positivo sim curti like thumb up' },
+      { char: '👎', keywords: 'descurti negativo nao deslike thumb down' },
+      { char: '✊', keywords: 'punho levantado poder fist power' },
+      { char: '👊', keywords: 'soco punho fist punch' },
+      { char: '👏', keywords: 'palmas bater palmas parabens clap hands' },
+      { char: '🙌', keywords: 'maos para cima comemorar celebration hands' },
+      { char: '👐', keywords: 'maos abertas open hands' },
+      { char: '🤲', keywords: 'maos juntas rezar oferta palms together' },
+      { char: '🤝', keywords: 'aperto de mao acordo handshake trust' },
+      { char: '🙏', keywords: 'por favor obrigado rezar oraçao pray please' },
+      { char: '💪', keywords: 'muque forte braço força biceps flex strength' }
+    ]
+  },
+  animals: {
+    name: 'Animais e natureza',
+    icon: '🐾',
+    list: [
+      { char: '🐶', keywords: 'cachorro cao dog pup' },
+      { char: '🐱', keywords: 'gato felino cat' },
+      { char: '🐭', keywords: 'rato mouse' },
+      { char: '🐹', keywords: 'hamster' },
+      { char: '🐰', keywords: 'coelho rabbit bunny' },
+      { char: '🦊', keywords: 'raposa fox' },
+      { char: ' Bear Bear', keywords: 'urso bear' },
+      { char: '🐼', keywords: 'panda' },
+      { char: '🦁', keywords: 'leao lion' },
+      { char: '🐮', keywords: 'vaca cow' },
+      { char: '🐷', keywords: 'porco pig' },
+      { char: '🐸', keywords: 'sapo frog' },
+      { char: '🐒', keywords: 'macaco monkey' },
+      { char: '🐔', keywords: 'galinha chicken' },
+      { char: '🐧', keywords: 'pinguim penguin' },
+      { char: '🐦', keywords: 'passaro bird' },
+      { char: '🐤', keywords: 'pintinho baby chick' },
+      { char: '🦆', keywords: 'pato duck' },
+      { char: '🦅', keywords: 'aguia eagle' },
+      { char: '🦉', keywords: 'coruja owl' },
+      { char: '🐺', keywords: 'lobo wolf' },
+      { char: '🐝', keywords: 'abelha bee insect' },
+      { char: '🐛', keywords: 'lagarta worm bug' },
+      { char: '🦋', keywords: 'borboleta butterfly' },
+      { char: '🐌', keywords: 'caracol snail' },
+      { char: '🐞', keywords: 'joaninha ladybug' },
+      { char: '🐜', keywords: 'formiga ant' },
+      { char: '🕷️', keywords: 'aranha spider' },
+      { char: '🦂', keywords: 'escorpiao scorpion' },
+      { char: '🐢', keywords: 'tartaruga turtle' },
+      { char: '🐍', keywords: 'cobra serpent snake' },
+      { char: '🐙', keywords: 'polvo octopus' },
+      { char: '🦑', keywords: 'lula squid' },
+      { char: '🦐', keywords: 'camarao shrimp' },
+      { char: '🦀', keywords: 'caranguejo crab' },
+      { char: '🐠', keywords: 'peixe tropical fish' },
+      { char: '🐟', keywords: 'peixe fish' },
+      { char: '🐬', keywords: 'golfinho dolphin' },
+      { char: '🐳', keywords: 'baleia whale' },
+      { char: '🦈', keywords: 'tubarao shark' },
+      { char: '🐊', keywords: 'jacare crocodile alligator' },
+      { char: '🐅', keywords: 'tigre tiger' },
+      { char: '🐆', keywords: 'leopardo leopard' },
+      { char: '🐘', keywords: 'elefante elephant' },
+      { char: '🦒', keywords: 'girafa giraffe' },
+      { char: '🐐', keywords: 'cabra goat' },
+      { char: '🦌', keywords: 'veado deer' },
+      { char: '🕊️', keywords: 'pomba paz dove peace' },
+      { char: '🌲', keywords: 'pinheiro arvore pine tree' },
+      { char: '🌳', keywords: 'arvore deciduous tree' },
+      { char: '🌴', keywords: 'palmeira palm tree' },
+      { char: '🌱', keywords: 'broto seedling leaf' },
+      { char: '🌿', keywords: 'erva herb plant' },
+      { char: '🍀', keywords: 'trevo sorte clover luck' },
+      { char: '🍁', keywords: 'folha outono maple leaf fall' },
+      { char: '🍂', keywords: 'folhas caídas fallen leaves' },
+      { char: '🍃', keywords: 'folha ao vento leaf wind' },
+      { char: '🌸', keywords: 'flor cerejeira cherry blossom' },
+      { char: '🌹', keywords: 'rosa rose flower' },
+      { char: '🌺', keywords: 'hibisco hibiscus' },
+      { char: '🌻', keywords: 'girassol sunflower' },
+      { char: '🌼', keywords: 'flor amarela blossom' },
+      { char: '🌷', keywords: 'tulipa tulip' },
+      { char: '🍄', keywords: 'cogumelo mushroom' },
+      { char: '💐', keywords: 'buque flores bouquet' }
+    ]
+  },
+  food: {
+    name: 'Alimentos e bebidas',
+    icon: '🍔',
+    list: [
+      { char: '🍏', keywords: 'maca verde green apple' },
+      { char: '🍎', keywords: 'maca vermelha red apple' },
+      { char: '🍐', keywords: 'pera pear' },
+      { char: '🍊', keywords: 'laranja orange tangerine' },
+      { char: '🍋', keywords: 'limao lemon' },
+      { char: '🍌', keywords: 'banana' },
+      { char: '🍉', keywords: 'melancia watermelon' },
+      { char: '🍇', keywords: 'uva grapes' },
+      { char: '🍓', keywords: 'morango strawberry' },
+      { char: '🍒', keywords: 'cereja cherries' },
+      { char: '🍍', keywords: 'abacaxi pineapple' },
+      { char: '🥥', keywords: 'coco coconut' },
+      { char: '🥑', keywords: 'abacate avocado' },
+      { char: '🍆', keywords: 'berinjela eggplant' },
+      { char: '🥔', keywords: 'batata potato' },
+      { char: '🥕', keywords: 'cenoura carrot' },
+      { char: '🌽', keywords: 'milho corn' },
+      { char: '🌶️', keywords: 'pimenta hot pepper spicy' },
+      { char: '🥦', keywords: 'brocolis broccoli' },
+      { char: '🍄', keywords: 'cogumelo mushroom' },
+      { char: '🍞', keywords: 'pao bread' },
+      { char: '🥐', keywords: 'croissant' },
+      { char: '🧀', keywords: 'queijo cheese' },
+      { char: '🍖', keywords: 'carne osso meat bone' },
+      { char: '🍗', keywords: 'coxa frango poultry leg chicken' },
+      { char: '🥩', keywords: 'bife carne steak meat' },
+      { char: '🥓', keywords: 'bacon' },
+      { char: '🍔', keywords: 'hamburguer burger' },
+      { char: '🍟', keywords: 'batata frita french fries' },
+      { char: '🍕', keywords: 'pizza' },
+      { char: '🌭', keywords: 'cachorro quente hotdog' },
+      { char: '🥪', keywords: 'sanduiche sandwich' },
+      { char: '🌮', keywords: 'taco' },
+      { char: '🍳', keywords: 'ovo frito frigideira cooking egg' },
+      { char: '🍲', keywords: 'sopa pote pot food soup' },
+      { char: '🥗', keywords: 'salada green salad' },
+      { char: '🍿', keywords: 'pipoca popcorn' },
+      { char: '🧈', keywords: 'manteiga butter' },
+      { char: '🧂', keywords: 'sal salt' },
+      { char: '🍣', keywords: 'sushi' },
+      { char: '🍛', keywords: 'curry rice' },
+      { char: '🍚', keywords: 'arroz cozido cooked rice' },
+      { char: '🍜', keywords: 'ramen macarrao noodles soup' },
+      { char: '🍝', keywords: 'espaguete pasta spaghetti' },
+      { char: '🍩', keywords: 'rosquinha donut' },
+      { char: '🍪', keywords: 'cookie biscoito' },
+      { char: '🎂', keywords: 'bolo aniversario birthday cake' },
+      { char: '🍰', keywords: 'fatia bolo shortcake' },
+      { char: '🍫', keywords: 'chocolate bar' },
+      { char: '🍬', keywords: 'bala doce candy' },
+      { char: '🍭', keywords: 'pirulito lollipop' },
+      { char: '🍯', keywords: 'mel honey' },
+      { char: '🥛', keywords: 'copo leite milk glass' },
+      { char: '☕', keywords: 'cafe quente hot drink coffee tea' },
+      { char: '🥤', keywords: 'copo canudo cup straw soda' },
+      { char: '🍺', keywords: 'cerveja beer mug' },
+      { char: '🍻', keywords: 'brinde cervejas clinking beers toast' },
+      { char: '🥂', keywords: 'brinde taças clinking glasses champagne' },
+      { char: '🍷', keywords: 'vinho wine glass' },
+      { char: '🥃', keywords: 'copo whisky tumbler glass' },
+      { char: '🍸', keywords: 'cocktail drink martini' },
+      { char: '🍹', keywords: 'drink tropical cocktail' },
+      { char: '🍾', keywords: 'espumante champagne bottle' },
+      { char: '🧊', keywords: 'gelo ice' }
+    ]
+  },
+  activities: {
+    name: 'Atividades',
+    icon: '⚽',
+    list: [
+      { char: '⚽', keywords: 'futebol soccer ball sports' },
+      { char: '🏀', keywords: 'basquete basketball' },
+      { char: '🏈', keywords: 'futebol americano football' },
+      { char: '⚾', keywords: 'beisebol baseball' },
+      { char: '🎾', keywords: 'tenis tennis ball' },
+      { char: '🏐', keywords: 'volei volleyball' },
+      { char: '🏓', keywords: 'ping pong tenis de mesa table tennis' },
+      { char: '🎯', keywords: 'alvo dardo bullseye dart' },
+      { char: '🎮', keywords: 'video game controle gamepad play' },
+      { char: '🎲', keywords: 'dado jogo game die dice' },
+      { char: '🧩', keywords: 'quebra cabeça jigsaw puzzle piece' },
+      { char: '🛹', keywords: 'skate skateboard' }
+    ]
+  },
+  travel: {
+    name: 'Viagens e lugares',
+    icon: '🚗',
+    list: [
+      { char: '🚗', keywords: 'carro automovel car auto' },
+      { char: '🚕', keywords: 'taxi' },
+      { char: '🚌', keywords: 'onibus bus' },
+      { char: '🚓', keywords: 'policia police car' },
+      { char: ' ambulances', keywords: 'ambulancia ambulance' },
+      { char: '🚒', keywords: 'bombeiro fire engine' },
+      { char: '🚚', keywords: 'caminhao delivery truck' },
+      { char: '🚲', keywords: 'bicicleta bike bicycle' },
+      { char: '🏍️', keywords: 'moto motocicleta motorcycle' },
+      { char: '🚨', keywords: 'giroflex sirene police light revolving' },
+      { char: '✈️', keywords: 'aviao airplane plane' },
+      { char: '🚀', keywords: 'foguete rocket space' },
+      { char: '⛵', keywords: 'veleiro sailboat ship' },
+      { char: '🚢', keywords: 'navio cargueiro ship' },
+      { char: '⚓', keywords: 'ancora anchor' },
+      { char: '🌋', keywords: 'vulcao volcano' },
+      { char: '⛰️', keywords: 'montanha mountain' },
+      { char: '🏕️', keywords: 'camping acampamento tent' },
+      { char: '🏖️', keywords: 'praia guarda sol beach umbrella' },
+      { char: '🏜️', keywords: 'deserto desert' },
+      { char: '🏙️', keywords: 'cidade skyline cityscape' },
+      { char: '🏠', keywords: 'casa house' }
+    ]
+  },
+  objects: {
+    name: 'Objetos',
+    icon: '💡',
+    list: [
+      { char: '⌚', keywords: 'relogio pulso watch time' },
+      { char: '📱', keywords: 'celular smartphone mobile' },
+      { char: '💻', keywords: 'notebook computador laptop' },
+      { char: '⌨️', keywords: 'teclado keyboard' },
+      { char: '📷', keywords: 'camera camera photo' },
+      { char: '📺', keywords: 'televisao tv television' },
+      { char: '🎙️', keywords: 'microfone estúdio studio microphone' },
+      { char: '🔋', keywords: 'bateria battery' },
+      { char: '🔌', keywords: 'tomada eletrica electric plug' },
+      { char: '💡', keywords: 'lampada ideia light bulb idea' },
+      { char: '🔦', keywords: 'lanterna flashlight' },
+      { char: '🕯️', keywords: 'vela candle' },
+      { char: '🗑️', keywords: 'lixo wastebasket trash bin' },
+      { char: '💵', keywords: 'dolar dollar bills money' },
+      { char: '🪙', keywords: 'moeda coin' },
+      { char: '💰', keywords: 'saco dinheiro bag money gold' },
+      { char: '💳', keywords: 'cartao credito credit card' },
+      { char: '💎', keywords: 'diamante pedra preciosa gem diamond' },
+      { char: '🔧', keywords: 'chave inglesa wrench tool' },
+      { char: '🔨', keywords: 'martelo hammer tool' },
+      { char: '🛠️', keywords: 'ferramentas tools' },
+      { char: '⚙️', keywords: 'engrenagem gear cog wheel' },
+      { char: '🔫', keywords: 'arma agua pistol water gun' },
+      { char: '💣', keywords: 'bomba bomb explosion' },
+      { char: '🔪', keywords: 'faca cozinha kitchen knife' },
+      { char: '🛡️', keywords: 'escudo shield protection' },
+      { char: '🔑', keywords: 'chave key' },
+      { char: '🔒', keywords: 'cadeado lock' },
+      { char: '✉️', keywords: 'envelope carta email' },
+      { char: '✏️', keywords: 'lapis pencil' },
+      { char: '🖊️', keywords: 'caneta pen' },
+      { char: '📎', keywords: 'clips paperclip' }
+    ]
+  },
+  symbols: {
+    name: 'Símbolos',
+    icon: '❤️',
+    list: [
+      { char: '❤️', keywords: 'coraçao vermelho red heart love' },
+      { char: '🧡', keywords: 'coraçao laranja orange heart love' },
+      { char: '💛', keywords: 'coraçao amarelo yellow heart love' },
+      { char: '💚', keywords: 'coraçao verde green heart love' },
+      { char: '💙', keywords: 'coraçao azul blue heart love' },
+      { char: '💜', keywords: 'coraçao roxo purple heart love' },
+      { char: '🖤', keywords: 'coraçao preto black heart' },
+      { char: '🤍', keywords: 'coraçao branco white heart' },
+      { char: '🤎', keywords: 'coraçao marrom brown heart' },
+      { char: '💔', keywords: 'coraçao partido broken heart' },
+      { char: '❣️', keywords: 'exclamaçao coraçao heart exclamation' },
+      { char: '💕', keywords: 'dois coraçoes two hearts' },
+      { char: '💞', keywords: 'coraçoes girando revolving hearts' },
+      { char: '💓', keywords: 'coraçao batendo beating heart' },
+      { char: '💗', keywords: 'coraçao crescendo growing heart' },
+      { char: '💖', keywords: 'coraçao brilhante sparkling heart' },
+      { char: '💘', keywords: 'coraçao flecha arrow heart cupid' },
+      { char: '💝', keywords: 'coraçao fita ribbon heart present' },
+      { char: '💟', keywords: 'decoraçao coraçao heart decoration' },
+      { char: '⭐', keywords: 'estrela star gold' },
+      { char: '🌟', keywords: 'estrela brilhante glowing star' },
+      { char: '✨', keywords: 'brilhos sparkles magic' },
+      { char: '⚡', keywords: 'raio relampago lightning bolt energy' },
+      { char: '💥', keywords: 'explosao colisao collision spark' },
+      { char: '🔥', keywords: 'fogo chama quente fire flame hot' },
+      { char: '☀️', keywords: 'sol calor dia sun warm' },
+      { char: '☁️', keywords: 'nuvem cloud' },
+      { char: '❄️', keywords: 'neve floco snowflake cold' },
+      { char: '💧', keywords: 'gota agua drop water' },
+      { char: '💦', keywords: 'gotas suor splash water sweat' },
+      { char: '💤', keywords: 'sono zzz sleep' }
+    ]
+  },
+  flags: {
+    name: 'Bandeiras',
+    icon: '🚩',
+    list: [
+      { char: '🇧🇷', keywords: 'bandeira brasil brazil flag' },
+      { char: '🇺🇸', keywords: 'bandeira estados unidos usa flag united states' },
+      { char: '🇵🇹', keywords: 'bandeira portugal flag' },
+      { char: '🇪🇸', keywords: 'bandeira espanha spain flag' },
+      { char: '🇦🇷', keywords: 'bandeira argentina flag' },
+      { char: '🇫🇷', keywords: 'bandeira frança france flag' },
+      { char: '🇮🇹', keywords: 'bandeira italia italy flag' },
+      { char: '🇩🇪', keywords: 'bandeira alemanha germany flag' },
+      { char: '🇬🇧', keywords: 'bandeira reino unido uk flag britain' },
+      { char: '🇯🇵', keywords: 'bandeira japao japan flag' },
+      { char: '🇨🇳', keywords: 'bandeira china flag' },
+      { char: '🇨🇦', keywords: 'bandeira canada flag' },
+      { char: '🇲🇽', keywords: 'bandeira mexico flag' },
+      { char: '🚩', keywords: 'bandeira vermelha red flag' },
+      { char: '🏳️‍🌈', keywords: 'bandeira arco iris lgbt pride flag' },
+      { char: '🏴‍☠️', keywords: 'bandeira pirata pirate flag skull' }
+    ]
+  }
+};
+
+function setupEmojiPicker() {
+  const emojiCategories = document.getElementById('emoji-picker-categories');
+  const emojiPickerScroll = document.getElementById('emoji-picker-scroll');
+  const btnEmojiToggle = document.getElementById('btn-emoji-toggle');
+  const emojiSearchInput = document.getElementById('emoji-search-input');
+  const emojiPicker = document.getElementById('emoji-picker');
+
+  if (!emojiCategories || !emojiPickerScroll || !btnEmojiToggle || !emojiSearchInput || !emojiPicker) return;
+
+  // Load recent emojis from storage (persist between sessions)
+  chrome.storage.local.get(['chatwootRecentEmojis'], (res) => {
+    let recent = res.chatwootRecentEmojis || ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
+    EMOJI_CATEGORIES.recent.list = recent.map(char => ({ char, keywords: 'recente recent' }));
+    
+    initializeEmojiPickerUI();
+  });
+
+  function initializeEmojiPickerUI() {
+    // 1. Render Category Tabs
+    emojiCategories.innerHTML = '';
+    Object.keys(EMOJI_CATEGORIES).forEach((catKey, index) => {
+      const tab = document.createElement('div');
+      tab.className = `emoji-cat-tab ${index === 0 ? 'active' : ''}`;
+      tab.setAttribute('data-cat', catKey);
+      tab.setAttribute('title', EMOJI_CATEGORIES[catKey].name);
+      tab.textContent = EMOJI_CATEGORIES[catKey].icon;
+
+      tab.addEventListener('click', (e) => {
+        e.preventDefault();
+        
+        // If searching, clear search first
+        if (emojiSearchInput.value) {
+          emojiSearchInput.value = '';
+          renderCategorizedEmojiList();
+        }
+
+        const section = document.getElementById(`emoji-sec-${catKey}`);
+        if (section && emojiPickerScroll) {
+          // Localized offset scroll (won't affect parent viewport scrolling)
+          emojiPickerScroll.scrollTop = section.offsetTop - emojiPickerScroll.offsetTop;
+        }
+      });
+      emojiCategories.appendChild(tab);
+    });
+
+    // 2. Render Categorized Emojis
+    renderCategorizedEmojiList();
+
+    // 3. Scroll spy logic to highlight tabs on scroll
+    emojiPickerScroll.addEventListener('scroll', () => {
+      if (emojiSearchInput.value.trim() !== '') return; // Disable scroll spy on search results
+
+      const sections = emojiPickerScroll.querySelectorAll('.emoji-category-section');
+      let activeCatKey = 'recent';
+      
+      sections.forEach(sec => {
+        const relativeTop = sec.offsetTop - emojiPickerScroll.offsetTop;
+        if (emojiPickerScroll.scrollTop >= relativeTop - 15) {
+          activeCatKey = sec.id.replace('emoji-sec-', '');
+        }
+      });
+
+      const tabs = emojiCategories.querySelectorAll('.emoji-cat-tab');
+      tabs.forEach(tab => {
+        if (tab.getAttribute('data-cat') === activeCatKey) {
+          tab.classList.add('active');
+        } else {
+          tab.classList.remove('active');
+        }
+      });
+    });
+
+    // 4. Search input event
+    emojiSearchInput.addEventListener('input', (e) => {
+      const query = e.target.value.trim().toLowerCase();
+      if (query === '') {
+        renderCategorizedEmojiList();
+      } else {
+        renderSearchedEmojiList(query);
+      }
+    });
+
+    // 5. Toggle picker popover
+    btnEmojiToggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      emojiPicker.classList.toggle('hidden');
+      if (!emojiPicker.classList.contains('hidden')) {
+        emojiSearchInput.value = '';
+        renderCategorizedEmojiList();
+        emojiSearchInput.focus();
+      }
+    });
+
+    // Close on clicking outside
+    document.addEventListener('click', (e) => {
+      if (!emojiPicker.classList.contains('hidden') && 
+          !emojiPicker.contains(e.target) && 
+          e.target !== btnEmojiToggle) {
+        emojiPicker.classList.add('hidden');
+      }
+    });
+  }
+
+  function renderCategorizedEmojiList() {
+    emojiPickerScroll.innerHTML = '';
+    
+    Object.keys(EMOJI_CATEGORIES).forEach(catKey => {
+      const cat = EMOJI_CATEGORIES[catKey];
+      if (catKey === 'recent' && cat.list.length === 0) return; // Hide Recentes header if empty
+
+      const sec = document.createElement('div');
+      sec.className = 'emoji-category-section';
+      sec.id = `emoji-sec-${catKey}`;
+
+      const title = document.createElement('div');
+      title.className = 'emoji-category-title';
+      title.textContent = cat.name;
+
+      const grid = document.createElement('div');
+      grid.className = 'emoji-category-grid';
+      grid.id = `emoji-grid-${catKey}`;
+
+      cat.list.forEach(emoji => {
+        const item = document.createElement('div');
+        item.className = 'emoji-item';
+        item.textContent = emoji.char;
+        item.addEventListener('click', (e) => {
+          e.preventDefault();
+          insertTextAtCursor(elements.chatReplyInput, emoji.char);
+          addToRecent(emoji.char);
+          elements.chatReplyInput.focus();
+        });
+        grid.appendChild(item);
+      });
+
+      sec.appendChild(title);
+      sec.appendChild(grid);
+      emojiPickerScroll.appendChild(sec);
+    });
+
+    // Restore active tab highlight to the first item (Recentes or Smileys)
+    const tabs = emojiCategories.querySelectorAll('.emoji-cat-tab');
+    tabs.forEach((tab, index) => {
+      if (index === 0) tab.classList.add('active');
+      else tab.classList.remove('active');
+    });
+    emojiPickerScroll.scrollTop = 0;
+  }
+
+  function renderSearchedEmojiList(query) {
+    emojiPickerScroll.innerHTML = '';
+    
+    // Find matches
+    const matches = [];
+    Object.keys(EMOJI_CATEGORIES).forEach(catKey => {
+      if (catKey === 'recent') return; // Skip Recentes category
+      EMOJI_CATEGORIES[catKey].list.forEach(emoji => {
+        if (emoji.keywords.includes(query) && !matches.includes(emoji.char)) {
+          matches.push(emoji.char);
+        }
+      });
+    });
+
+    // Render results in flat grid
+    const sec = document.createElement('div');
+    sec.className = 'emoji-category-section';
+
+    const title = document.createElement('div');
+    title.className = 'emoji-category-title';
+    title.textContent = `Resultados da busca ("${query}")`;
+    sec.appendChild(title);
+
+    if (matches.length === 0) {
+      const placeholder = document.createElement('div');
+      placeholder.style.color = 'var(--text-muted)';
+      placeholder.style.fontSize = '12.5px';
+      placeholder.style.padding = '12px 6px';
+      placeholder.textContent = 'Nenhum emoji correspondente encontrado.';
+      sec.appendChild(placeholder);
+    } else {
+      const grid = document.createElement('div');
+      grid.className = 'emoji-category-grid';
+
+      matches.forEach(char => {
+        const item = document.createElement('div');
+        item.className = 'emoji-item';
+        item.textContent = char;
+        item.addEventListener('click', (e) => {
+          e.preventDefault();
+          insertTextAtCursor(elements.chatReplyInput, char);
+          addToRecent(char);
+          elements.chatReplyInput.focus();
+        });
+        grid.appendChild(item);
+      });
+      sec.appendChild(grid);
+    }
+    
+    emojiPickerScroll.appendChild(sec);
+
+    // Remove active category tab highlight during searches
+    const tabs = emojiCategories.querySelectorAll('.emoji-cat-tab');
+    tabs.forEach(tab => tab.classList.remove('active'));
+  }
+
+  function addToRecent(char) {
+    chrome.storage.local.get(['chatwootRecentEmojis'], (res) => {
+      let recent = res.chatwootRecentEmojis || ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
+      recent = recent.filter(c => c !== char);
+      recent.unshift(char);
+      recent = recent.slice(0, 24); // Cap recent emojis at 24
+
+      chrome.storage.local.set({ chatwootRecentEmojis: recent }, () => {
+        EMOJI_CATEGORIES.recent.list = recent.map(c => ({ char: c, keywords: 'recente recent' }));
+        
+        // Re-render recent grid container smoothly if it currently exists
+        const recentGrid = document.getElementById('emoji-grid-recent');
+        if (recentGrid) {
+          recentGrid.innerHTML = '';
+          recent.forEach(c => {
+            const item = document.createElement('div');
+            item.className = 'emoji-item';
+            item.textContent = c;
+            item.addEventListener('click', (e) => {
+              e.preventDefault();
+              insertTextAtCursor(elements.chatReplyInput, c);
+              addToRecent(c);
+              elements.chatReplyInput.focus();
+            });
+            recentGrid.appendChild(item);
+          });
+        }
+      });
+    });
+  }
+}
+
+function insertTextAtCursor(textarea, text) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const currentText = textarea.value;
+  
+  textarea.value = currentText.substring(0, start) + text + currentText.substring(end);
+  textarea.selectionStart = textarea.selectionEnd = start + text.length;
+  
+  // Trigger auto-grow update
+  textarea.dispatchEvent(new Event('input'));
+}
+
+function applyFormatting(textarea, symbol) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const currentText = textarea.value;
+  const selectedText = currentText.substring(start, end);
+  
+  // WhatsApp Markdown style bold (*), italic (_), strikethrough (~), code (`)
+  const formattedText = `${symbol}${selectedText}${symbol}`;
+  
+  textarea.value = currentText.substring(0, start) + formattedText + currentText.substring(end);
+  
+  if (selectedText.length === 0) {
+    textarea.selectionStart = textarea.selectionEnd = start + symbol.length;
+  } else {
+    textarea.selectionStart = textarea.selectionEnd = start + formattedText.length;
+  }
+  
+  textarea.dispatchEvent(new Event('input'));
+  textarea.focus();
+}
+
+// ==========================================
+// FILE ATTACHMENTS & VOICE RECORDING SYSTEM
+// ==========================================
+
+function renderAttachmentsPreview() {
+  const bar = document.getElementById('attachment-preview-bar');
+  const list = document.getElementById('attachment-preview-list');
+  if (!bar || !list) return;
+
+  if (pendingAttachments.length === 0) {
+    bar.classList.add('hidden');
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  list.innerHTML = '';
+
+  pendingAttachments.forEach((file, index) => {
+    const item = document.createElement('div');
+    item.className = 'attachment-preview-item';
+
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        item.innerHTML = `
+          <img src="${e.target.result}" class="attachment-thumbnail">
+          <span class="attachment-name" title="${file.name}">${file.name}</span>
+          <button type="button" class="btn-edit-attachment" title="Editar Imagem">✏️</button>
+          <button type="button" class="btn-remove-attachment" title="Remover">&times;</button>
+        `;
+        item.querySelector('.btn-remove-attachment').addEventListener('click', () => {
+          pendingAttachments.splice(index, 1);
+          renderAttachmentsPreview();
+        });
+        item.querySelector('.btn-edit-attachment').addEventListener('click', () => {
+          editingAttachmentIndex = index;
+          openImageEditor(file);
+        });
+      };
+      reader.readAsDataURL(file);
+    } else {
+      item.innerHTML = `
+        <div class="attachment-icon-placeholder">📄</div>
+        <span class="attachment-name" title="${file.name}">${file.name}</span>
+        <button type="button" class="btn-remove-attachment" title="Remover">&times;</button>
+      `;
+      item.querySelector('.btn-remove-attachment').addEventListener('click', () => {
+        pendingAttachments.splice(index, 1);
+        renderAttachmentsPreview();
+      });
+    }
+
+    list.appendChild(item);
+  });
+}
+
+function startAudioRecording(stream) {
+  const chatReplyBar = document.getElementById('chat-reply-bar');
+  const audioRecordingBar = document.getElementById('audio-recording-bar');
+  const chatFormatToolbar = document.getElementById('chat-format-toolbar');
+  const btnToggleToolbar = document.getElementById('btn-toggle-toolbar');
+  const recordingTimer = document.getElementById('recording-timer');
+
+  if (!chatReplyBar || !audioRecordingBar || !recordingTimer) return;
+
+  // Hide formatting toolbar if open
+  if (chatFormatToolbar) chatFormatToolbar.classList.add('hidden');
+  if (btnToggleToolbar) btnToggleToolbar.classList.remove('active');
+
+  // Switch reply bars
+  chatReplyBar.classList.add('hidden');
+  audioRecordingBar.classList.remove('hidden');
+
+  // Initialize MediaRecorder with correct Opus codec support check
+  let options = {};
+  if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+    options = { mimeType: 'audio/ogg;codecs=opus' };
+  } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+    options = { mimeType: 'audio/webm;codecs=opus' };
+  }
+
+  mediaRecorder = new MediaRecorder(stream, options);
+  audioChunks = [];
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) {
+      audioChunks.push(e.data);
+    }
+  };
+
+  // Start recording
+  mediaRecorder.start();
+  recordingStartTime = Date.now();
+
+  // Start timer interval
+  recordingTimer.textContent = '00:00';
+  recordingTimerInterval = setInterval(() => {
+    const elapsedSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
+    const mm = String(Math.floor(elapsedSeconds / 60)).padStart(2, '0');
+    const ss = String(elapsedSeconds % 60).padStart(2, '0');
+    recordingTimer.textContent = `${mm}:${ss}`;
+  }, 1000);
+}
+
+function cancelAudioRecording() {
+  if (!mediaRecorder) return;
+
+  // Stop timer
+  clearInterval(recordingTimerInterval);
+  recordingTimerInterval = null;
+
+  // Discard chunks on stop
+  mediaRecorder.onstop = null;
+  
+  // Stop mic tracks
+  mediaRecorder.stream.getTracks().forEach(track => track.stop());
+
+  mediaRecorder.stop();
+  mediaRecorder = null;
+
+  // Reset UI
+  document.getElementById('audio-recording-bar').classList.add('hidden');
+  document.getElementById('chat-reply-bar').classList.remove('hidden');
+}
+
+function stopAndSendAudioRecording() {
+  if (!mediaRecorder) return;
+
+  // Stop timer
+  clearInterval(recordingTimerInterval);
+  recordingTimerInterval = null;
+
+  // Handle recorded output
+  mediaRecorder.onstop = async () => {
+    // WhatsApp expects audio/ogg files. Package it as audio/ogg and .ogg extension
+    const audioBlob = new Blob(audioChunks, { type: 'audio/ogg' });
+    const audioFile = new File([audioBlob], `voice_note_${Date.now()}.ogg`, { type: 'audio/ogg' });
+
+    // Stop mic tracks
+    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    mediaRecorder = null;
+
+    // Send via API
+    await sendAudioMessage(audioFile);
+  };
+
+  mediaRecorder.stop();
+}
+
+async function sendAudioMessage(file) {
+  if (!currentActiveChat) return;
+  const { id: conversationId, accountId } = currentActiveChat;
+
+  showToast('Enviando áudio gravado...', 'success');
+
+  const formData = new FormData();
+  formData.append('message_type', 'outgoing');
+  formData.append('private', 'false');
+  formData.append('attachments[]', file, file.name);
+
+  try {
+    const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+    await chatwootFetch(endpoint, {
+      method: 'POST',
+      body: formData
+    });
+
+    showToast('Áudio enviado com sucesso!', 'success');
+    await loadChatMessages(accountId, conversationId, true);
+  } catch (err) {
+    console.error('Error sending audio message:', err);
+    showToast(`Erro ao enviar áudio: ${err.message}`, 'error');
+  } finally {
+    document.getElementById('audio-recording-bar').classList.add('hidden');
+    document.getElementById('chat-reply-bar').classList.remove('hidden');
+  }
+}
+
+// Speed controller for voice messages (1x -> 1.5x -> 2x)
+window.toggleAudioSpeed = function(btn) {
+  const audio = btn.parentElement.querySelector('audio');
+  if (!audio) return;
+
+  const currentSpeed = parseFloat(btn.textContent) || 1.0;
+  let nextSpeed = 1.0;
+
+  if (currentSpeed === 1.0) {
+    nextSpeed = 1.5;
+  } else if (currentSpeed === 1.5) {
+    nextSpeed = 2.0;
+  } else {
+    nextSpeed = 1.0;
+  }
+
+  audio.playbackRate = nextSpeed;
+  btn.textContent = `${nextSpeed}x`;
+  
+  // Apply visual feedback classes
+  if (nextSpeed > 1.0) {
+    btn.style.backgroundColor = 'var(--primary)';
+    btn.style.color = 'white';
+    btn.style.borderColor = 'var(--primary)';
+  } else {
+    btn.style.backgroundColor = 'var(--bg-tertiary)';
+    btn.style.color = 'var(--text-primary)';
+    btn.style.borderColor = 'var(--border-color)';
+  }
+};
+
+// Lightbox Modal for fullscreen previews and file downloads
+let currentLightboxItem = null;
+
+window.openLightbox = function(url, fileType, filename) {
+  const modal = document.getElementById('lightbox-modal');
+  const content = document.getElementById('lightbox-content');
+  const filenameDisplay = document.getElementById('lightbox-filename');
+
+  if (!modal || !content || !filenameDisplay) return;
+
+  currentLightboxItem = { url, filename };
+  filenameDisplay.textContent = filename;
+  content.innerHTML = '';
+
+  if (fileType === 'image') {
+    const img = document.createElement('img');
+    img.src = url;
+    content.appendChild(img);
+  } else if (fileType === 'video') {
+    const video = document.createElement('video');
+    video.src = url;
+    video.controls = true;
+    video.autoplay = true;
+    content.appendChild(video);
+  } else {
+    const docDiv = document.createElement('div');
+    docDiv.className = 'document-preview';
+    docDiv.innerHTML = `
+      <div class="document-icon">📄</div>
+      <div style="font-size: 14px; margin-top: 8px; color: var(--text-primary); font-weight: 500; text-align: center; word-break: break-all; padding: 0 20px;">${filename}</div>
+      <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Este documento pode ser baixado clicando no botão abaixo.</div>
+    `;
+    content.appendChild(docDiv);
+  }
+
+  modal.classList.remove('hidden');
+};
+
+function setupLightboxHandlers() {
+  const modal = document.getElementById('lightbox-modal');
+  const closeBtn = document.getElementById('btn-lightbox-close');
+  const downloadBtn = document.getElementById('btn-lightbox-download');
+
+  if (!modal || !closeBtn || !downloadBtn) return;
+
+  closeBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const video = modal.querySelector('video');
+    if (video) video.pause();
+
+    modal.classList.add('hidden');
+    currentLightboxItem = null;
+  });
+
+  downloadBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!currentLightboxItem) return;
+
+    showToast('Iniciando download...', 'success');
+
+    chrome.downloads.download({
+      url: currentLightboxItem.url,
+      filename: currentLightboxItem.filename,
+      saveAs: true
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.error('Download error using chrome.downloads:', chrome.runtime.lastError);
+        // Fallback to iframe/new tab download
+        const a = document.createElement('a');
+        a.href = currentLightboxItem.url;
+        a.download = currentLightboxItem.filename;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    });
+  });
+
+  // Event delegation to capture media preview clicks (prevents CSP violations)
+  if (elements.chatMessagesArea) {
+    elements.chatMessagesArea.addEventListener('click', (e) => {
+      // 1. Click on Image preview
+      const img = e.target.closest('.chat-img-preview');
+      if (img) {
+        e.preventDefault();
+        const url = img.getAttribute('src');
+        const filename = img.getAttribute('data-filename') || 'imagem.png';
+        openLightbox(url, 'image', filename);
+        return;
+      }
+
+      // 2. Click on Video fullscreen overlay
+      const btnVideo = e.target.closest('.btn-video-fullscreen');
+      if (btnVideo) {
+        e.preventDefault();
+        const url = btnVideo.getAttribute('data-url');
+        const filename = btnVideo.getAttribute('data-filename') || 'video.mp4';
+        openLightbox(url, 'video', filename);
+        return;
+      }
+
+      // 3. Click on Audio speed multiplier
+      const btnSpeed = e.target.closest('.btn-audio-speed');
+      if (btnSpeed) {
+        e.preventDefault();
+        toggleAudioSpeed(btnSpeed);
+        return;
+      }
+
+      // 4. Click on Document/File link
+      const linkDoc = e.target.closest('.chat-file-download-link');
+      if (linkDoc) {
+        e.preventDefault();
+        const url = linkDoc.getAttribute('data-url');
+        const filename = linkDoc.getAttribute('data-filename') || 'documento';
+        openLightbox(url, 'file', filename);
+        return;
+      }
+    });
+  }
+}
+
+// Convert WhatsApp Markdown format symbols (*bold*, _italic_, ~strikethrough~, `code`) to secure HTML equivalents
+function formatWhatsAppMarkdown(text) {
+  if (!text) return '';
+
+  // Escape HTML to prevent cross-site scripting (XSS)
+  let escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+  // Bold: *text* -> <strong>text</strong>
+  escaped = escaped.replace(/\*([^*]+)\*/g, '<strong>$1</strong>');
+
+  // Italic: _text_ -> <em>text</em>
+  escaped = escaped.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+  // Strikethrough: ~text~ -> <del>text</del>
+  escaped = escaped.replace(/~([^~]+)~/g, '<del>$1</del>');
+
+  // Monospace/Code: `text` -> <code>text</code>
+  escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  return escaped;
+}
+
+// ==========================================
+// IMAGE EDITOR SYSTEM
+// ==========================================
+let editingAttachmentIndex = -1;
+let editorCanvas = null;
+let editorCtx = null;
+let isDrawing = false;
+let canvasStates = [];
+let originalFile = null;
+
+function openImageEditor(file) {
+  const modal = document.getElementById('image-editor-modal');
+  editorCanvas = document.getElementById('editor-canvas');
+  if (!modal || !editorCanvas) return;
+
+  originalFile = file;
+  editorCtx = editorCanvas.getContext('2d');
+  canvasStates = [];
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      // Fit or use original image dimensions for drawing quality
+      editorCanvas.width = img.width;
+      editorCanvas.height = img.height;
+      
+      // Draw image to canvas
+      editorCtx.clearRect(0, 0, editorCanvas.width, editorCanvas.height);
+      editorCtx.drawImage(img, 0, 0);
+      
+      // Save initial state
+      saveCanvasState();
+      
+      // Open modal
+      modal.classList.remove('hidden');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function saveCanvasState() {
+  if (canvasStates.length >= 15) {
+    canvasStates.shift();
+  }
+  canvasStates.push(editorCanvas.toDataURL());
+}
+
+function undoCanvasState() {
+  if (canvasStates.length <= 1) return; // Keep initial background image state
+  canvasStates.pop(); // Remove current state
+  const prevStateUrl = canvasStates[canvasStates.length - 1];
+  
+  const img = new Image();
+  img.onload = () => {
+    editorCtx.clearRect(0, 0, editorCanvas.width, editorCanvas.height);
+    editorCtx.drawImage(img, 0, 0);
+  };
+  img.src = prevStateUrl;
+}
+
+function getCanvasMouseCoords(canvas, e) {
+  const rect = canvas.getBoundingClientRect();
+  
+  // Handle touch events
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  
+  // Translate coordinate scale ratio
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+function setupCanvasDrawingEvents() {
+  const canvas = document.getElementById('editor-canvas');
+  const brushColor = document.getElementById('editor-brush-color');
+  const brushSize = document.getElementById('editor-brush-size');
+  
+  const btnUndo = document.getElementById('btn-editor-undo');
+  const btnClear = document.getElementById('btn-editor-clear');
+  const btnCancel = document.getElementById('btn-editor-cancel');
+  const btnConfirm = document.getElementById('btn-editor-confirm');
+  const modal = document.getElementById('image-editor-modal');
+
+  if (!canvas || !brushColor || !brushSize) return;
+
+  function startDraw(e) {
+    e.preventDefault();
+    isDrawing = true;
+    const coords = getCanvasMouseCoords(canvas, e);
+    
+    editorCtx.beginPath();
+    editorCtx.moveTo(coords.x, coords.y);
+    editorCtx.strokeStyle = brushColor.value;
+    editorCtx.lineWidth = parseInt(brushSize.value) || 6;
+    editorCtx.lineCap = 'round';
+    editorCtx.lineJoin = 'round';
+  }
+
+  function draw(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const coords = getCanvasMouseCoords(canvas, e);
+    editorCtx.lineTo(coords.x, coords.y);
+    editorCtx.stroke();
+  }
+
+  function stopDraw(e) {
+    if (!isDrawing) return;
+    isDrawing = false;
+    editorCtx.closePath();
+    saveCanvasState();
+  }
+
+  // Mouse bindings
+  canvas.addEventListener('mousedown', startDraw);
+  canvas.addEventListener('mousemove', draw);
+  canvas.addEventListener('mouseup', stopDraw);
+  canvas.addEventListener('mouseleave', stopDraw);
+
+  // Touch bindings
+  canvas.addEventListener('touchstart', startDraw, { passive: false });
+  canvas.addEventListener('touchmove', draw, { passive: false });
+  canvas.addEventListener('touchend', stopDraw);
+
+  // Undo button
+  if (btnUndo) {
+    btnUndo.addEventListener('click', (e) => {
+      e.preventDefault();
+      undoCanvasState();
+    });
+  }
+
+  // Clear button
+  if (btnClear) {
+    btnClear.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (canvasStates.length <= 1) return;
+      
+      // Restore initial state (background image)
+      const initialState = canvasStates[0];
+      const img = new Image();
+      img.onload = () => {
+        editorCtx.clearRect(0, 0, editorCanvas.width, editorCanvas.height);
+        editorCtx.drawImage(img, 0, 0);
+        canvasStates = [initialState];
+        saveCanvasState();
+      };
+      img.src = initialState;
+    });
+  }
+
+  // Cancel button
+  if (btnCancel) {
+    btnCancel.addEventListener('click', (e) => {
+      e.preventDefault();
+      modal.classList.add('hidden');
+      editingAttachmentIndex = -1;
+    });
+  }
+
+  // Confirm/Save button
+  if (btnConfirm) {
+    btnConfirm.addEventListener('click', (e) => {
+      e.preventDefault();
+      canvas.toBlob((blob) => {
+        const fileName = originalFile ? originalFile.name : `edit_${Date.now()}.png`;
+        const editedFile = new File([blob], fileName, { type: 'image/png' });
+        
+        if (editingAttachmentIndex >= 0) {
+          // Replace existing attachment
+          pendingAttachments[editingAttachmentIndex] = editedFile;
+        } else {
+          // Push new attachment
+          pendingAttachments.push(editedFile);
+        }
+        
+        renderAttachmentsPreview();
+        modal.classList.add('hidden');
+        editingAttachmentIndex = -1;
+      }, 'image/png');
+    });
   }
 }

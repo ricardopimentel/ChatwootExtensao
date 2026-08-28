@@ -13,6 +13,7 @@ let isInitializing = false;
 console.log('[Chatwoot Helper] Service worker starting...');
 initConnection();
 updateBadgeFromStorage();
+syncAlarmsFromStorage();
 
 // Set up Chrome Alarms to ensure persistent connection
 chrome.runtime.onInstalled.addListener(() => {
@@ -258,8 +259,8 @@ function showNotification(msg, accountId) {
   const conversationId = msg.conversation_id;
   const notificationId = `chatwoot_conv_${accountId}_${conversationId}`;
 
-  // Fetch all pending notifications from local storage to group them
-  chrome.storage.local.get(['chatwootNotifications'], (result) => {
+  // Fetch all pending notifications from synced storage to group them
+  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
     const list = result.chatwootNotifications || [];
     
     // Filter notifications for this specific conversation
@@ -341,7 +342,7 @@ function saveNotificationToStorage(msgData, accountId) {
   const senderName = msgData.sender ? msgData.sender.name : 'Cliente';
   const content = msgData.content || 'Nova mensagem (mídia/anexo)';
 
-  chrome.storage.local.get(['chatwootNotifications'], (result) => {
+  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
     const list = result.chatwootNotifications || [];
     
     const newNotification = {
@@ -356,10 +357,15 @@ function saveNotificationToStorage(msgData, accountId) {
     };
 
     // Filter out duplicates (if any)
-    const filteredList = list.filter(item => item.id !== notificationId);
+    let filteredList = list.filter(item => item.id !== notificationId);
     filteredList.unshift(newNotification);
 
-    chrome.storage.local.set({ chatwootNotifications: filteredList }, () => {
+    // Limit to 30 items for sync storage quota limits
+    if (filteredList.length > 30) {
+      filteredList = filteredList.slice(0, 30);
+    }
+
+    chrome.storage.sync.set({ chatwootNotifications: filteredList }, () => {
       updateExtensionBadge(filteredList);
       showNotification(msgData, accountId);
     });
@@ -367,7 +373,7 @@ function saveNotificationToStorage(msgData, accountId) {
 }
 
 function updateBadgeFromStorage() {
-  chrome.storage.local.get(['chatwootNotifications'], (result) => {
+  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
     const list = result.chatwootNotifications || [];
     updateExtensionBadge(list);
   });
@@ -380,12 +386,12 @@ function updateExtensionBadge(list) {
 }
 
 function removeNotificationsForConversation(accountId, conversationId) {
-  chrome.storage.local.get(['chatwootNotifications'], (result) => {
+  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
     const list = result.chatwootNotifications || [];
     const filteredList = list.filter(item => 
       !(item.accountId == accountId && item.conversationId == conversationId)
     );
-    chrome.storage.local.set({ chatwootNotifications: filteredList }, () => {
+    chrome.storage.sync.set({ chatwootNotifications: filteredList }, () => {
       updateExtensionBadge(filteredList);
     });
   });
@@ -416,3 +422,65 @@ function showReminderAlarmNotification(reminderId) {
     }
   });
 }
+
+// SYNC ALARMS & STORAGE WATCHERS
+function syncAlarms(reminders) {
+  chrome.alarms.getAll((currentAlarms) => {
+    const alarmMap = new Map();
+    currentAlarms.forEach(alarm => {
+      if (alarm.name.startsWith('reminder_')) {
+        alarmMap.set(alarm.name, alarm);
+      }
+    });
+
+    const now = Date.now();
+    const activeReminderIds = new Set();
+
+    reminders.forEach(reminder => {
+      if (reminder.alarmTime && reminder.alarmTime > now) {
+        activeReminderIds.add(reminder.id);
+        const existingAlarm = alarmMap.get(reminder.id);
+        if (!existingAlarm) {
+          console.log(`[Chatwoot Helper] Creating synced alarm for: ${reminder.id}`);
+          chrome.alarms.create(reminder.id, { when: reminder.alarmTime });
+        } else {
+          // If the alarm time is significantly different, recreate it
+          if (Math.abs(existingAlarm.scheduledTime - reminder.alarmTime) > 1000) {
+            console.log(`[Chatwoot Helper] Updating synced alarm for: ${reminder.id}`);
+            chrome.alarms.create(reminder.id, { when: reminder.alarmTime });
+          }
+        }
+      }
+    });
+
+    // Clear alarms that are no longer in the active reminders list
+    alarmMap.forEach((alarm, alarmName) => {
+      if (!activeReminderIds.has(alarmName)) {
+        console.log(`[Chatwoot Helper] Clearing obsolete alarm: ${alarmName}`);
+        chrome.alarms.clear(alarmName);
+      }
+    });
+  });
+}
+
+function syncAlarmsFromStorage() {
+  chrome.storage.sync.get(['chatwootReminders'], (result) => {
+    const list = result.chatwootReminders || [];
+    syncAlarms(list);
+  });
+}
+
+// Watch sync storage changes to keep local alarms & badges in sync
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'sync') {
+    if (changes.chatwootReminders) {
+      console.log('[Chatwoot Helper] Synced reminders updated. Updating local alarms...');
+      syncAlarms(changes.chatwootReminders.newValue || []);
+    }
+    if (changes.chatwootNotifications) {
+      console.log('[Chatwoot Helper] Synced notifications updated. Updating badge...');
+      updateBadgeFromStorage();
+    }
+  }
+});
+
