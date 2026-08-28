@@ -20,7 +20,7 @@ let activeTags = [];
 let availableLabels = [];
 
 // Conversations state
-let activeChatFilter = 'new';
+let activeChatFilter = 'progress';
 let currentActiveChat = null;
 let chatPollInterval = null;
 let fetchedConversations = [];
@@ -390,8 +390,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Load conversations initial state
-  loadConversations();
+  // Restore last navigation state (tab + open conversation if any)
+  restoreNavigationState();
 
   // Setup Lightbox Modal events
   setupLightboxHandlers();
@@ -468,6 +468,9 @@ function switchTab(tabId) {
       pane.classList.remove('active');
     }
   });
+
+  // Persist tab state
+  saveNavigationState({ activeTab: tabId });
 
   // Action on tab entry
   if (tabId === 'chats') {
@@ -2085,6 +2088,15 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   elements.chatsListView.classList.add('hidden');
   elements.chatsDetailView.classList.remove('hidden');
 
+  // Persist open conversation state
+  saveNavigationState({
+    activeTab: 'chats',
+    openConversationId: conversationId,
+    openContactName: contactName,
+    openAccountId: accountId,
+    openInboxId: inboxId
+  });
+
   loadChatMessages(accountId, conversationId);
 
   if (chatPollInterval) {
@@ -2263,6 +2275,19 @@ function renderChatMessages(messages, silent) {
           `;
         }
 
+        let linkPreviewHtml = '';
+        if (msg.content) {
+          const urlMatch = msg.content.match(/(https?:\/\/[^\s]+)/);
+          if (urlMatch) {
+            // Strip any trailing punctuation (like brackets, quotes, dots) from match
+            let url = urlMatch[0];
+            if (url.endsWith('.') || url.endsWith(',') || url.endsWith(')') || url.endsWith(']')) {
+              url = url.slice(0, -1);
+            }
+            linkPreviewHtml = `<div class="link-preview-container" data-url="${url}"></div>`;
+          }
+        }
+
         messagesHtml += `
           <div class="${bubbleClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
             <button type="button" class="btn-msg-menu" title="Opções da mensagem">
@@ -2270,6 +2295,7 @@ function renderChatMessages(messages, silent) {
             </button>
             ${quoteHtml}
             ${contentHtml}
+            ${linkPreviewHtml}
             ${reactionsHtml}
             <span class="chat-msg-time">${timeStr}</span>
           </div>
@@ -2289,9 +2315,15 @@ function renderChatMessages(messages, silent) {
 
     elements.chatMessagesArea.innerHTML = messagesHtml;
     
+    // Load link previews asynchronously
+    loadLinkPreviews();
+
     if (!silent || isNearBottom) {
       elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
     }
+  } else {
+    // Even if innerHTML is identical, make sure previews load if any container is empty
+    loadLinkPreviews();
   }
 }
 
@@ -2315,6 +2347,10 @@ function closeChatView() {
 
   elements.chatsDetailView.classList.add('hidden');
   elements.chatsListView.classList.remove('hidden');
+
+  // Clear open conversation from state, stay on chats tab
+  saveNavigationState({ activeTab: 'chats', openConversationId: null });
+
   loadConversations();
 }
 
@@ -3559,6 +3595,9 @@ function formatWhatsAppMarkdown(text) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
+  // Convert URLs to clickable hyperlinks
+  escaped = escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="chat-msg-link" rel="noopener noreferrer">$1</a>');
+
   // Bold: *text* -> <strong>text</strong>
   escaped = escaped.replace(/\*([^*]+)\*/g, '<strong>$1</strong>');
 
@@ -3975,3 +4014,106 @@ function scrollToMessageId(id) {
     showToast('Mensagem original não carregada no histórico atual.', 'error');
   }
 }
+
+// ==========================================
+// LINK PREVIEWS SYSTEM
+// ==========================================
+const linkPreviewsCache = {};
+
+async function fetchLinkPreview(url) {
+  if (linkPreviewsCache[url]) return linkPreviewsCache[url];
+
+  try {
+    const response = await fetch(url);
+    const html = await response.text();
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    const title = doc.querySelector('title')?.textContent || 
+                  doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || '';
+    const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || 
+                        doc.querySelector('meta[property="og:description"]')?.getAttribute('content') || '';
+    const image = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || 
+                  doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content') || '';
+
+    const preview = { 
+      title: title.trim(), 
+      description: description.trim(), 
+      image: image.trim(), 
+      url 
+    };
+    linkPreviewsCache[url] = preview;
+    return preview;
+  } catch (err) {
+    console.error('Failed to scrape link preview metadata:', url, err);
+    return null;
+  }
+}
+
+async function loadLinkPreviews() {
+  if (!elements.chatMessagesArea) return;
+  
+  const containers = elements.chatMessagesArea.querySelectorAll('.link-preview-container:not(.loaded)');
+  containers.forEach(async (container) => {
+    container.classList.add('loaded');
+    const url = container.getAttribute('data-url');
+    if (!url) return;
+
+    const preview = await fetchLinkPreview(url);
+    if (preview && (preview.title || preview.description)) {
+      container.innerHTML = `
+        <a href="${preview.url}" target="_blank" class="msg-link-preview-card" rel="noopener noreferrer">
+          ${preview.image ? `<img src="${preview.image}" alt="Preview" class="link-preview-img">` : ''}
+          <div class="link-preview-info">
+            <span class="link-preview-title">${preview.title}</span>
+            ${preview.description ? `<span class="link-preview-desc">${preview.description}</span>` : ''}
+            <span class="link-preview-domain">${new URL(preview.url).hostname}</span>
+          </div>
+        </a>
+      `;
+    }
+  });
+}
+
+// ==========================================
+// NAVIGATION STATE PERSISTENCE
+// ==========================================
+
+function saveNavigationState(updates) {
+  chrome.storage.local.get(['navState'], (result) => {
+    const current = result.navState || {};
+    const next = Object.assign({}, current, updates);
+    if ('openConversationId' in updates && !updates.openConversationId) {
+      delete next.openConversationId;
+      delete next.openContactName;
+      delete next.openAccountId;
+      delete next.openInboxId;
+    }
+    chrome.storage.local.set({ navState: next });
+  });
+}
+
+function restoreNavigationState() {
+  chrome.storage.local.get(['navState'], (result) => {
+    const state = result.navState || {};
+    const activeTab = state.activeTab || 'chats';
+
+    switchTab(activeTab);
+
+    if (activeTab === 'chats') {
+      if (state.openConversationId) {
+        openConversationChat(
+          state.openConversationId,
+          state.openContactName || 'Contato',
+          state.openAccountId,
+          state.openInboxId || ''
+        );
+        loadConversations();
+      } else {
+        loadConversations();
+      }
+    }
+  });
+}
+
