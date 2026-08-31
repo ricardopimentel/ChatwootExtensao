@@ -174,8 +174,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       const contactName = urlParams.get('contactName') || 'Cliente';
       document.title = `${contactName} - Chatwoot`;
       startActiveConversationHeartbeat(paramConvId);
+
+      // Register windowId and tabId for instant cross-session focus
+      chrome.tabs.getCurrent((currTab) => {
+        if (currTab) {
+          chrome.storage.local.get(['openConversationWindows'], (res) => {
+            const winMap = res.openConversationWindows || {};
+            winMap[String(paramConvId)] = {
+              tabId: currTab.id,
+              windowId: currTab.windowId,
+              openedAt: Date.now()
+            };
+            chrome.storage.local.set({ openConversationWindows: winMap });
+          });
+        }
+      });
+
       window.addEventListener('beforeunload', () => {
         stopActiveConversationHeartbeat(paramConvId);
+        chrome.storage.local.get(['openConversationWindows'], (res) => {
+          const winMap = res.openConversationWindows || {};
+          delete winMap[String(paramConvId)];
+          chrome.storage.local.set({ openConversationWindows: winMap });
+        });
       });
     }
 
@@ -269,6 +290,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (currentActiveChat && message.conversationId == currentActiveChat.id) {
           loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
         }
+      } else if (message.action === 'activeTabsChanged') {
+        filterAndRenderConversations();
       } else if (message.action === 'conversationStatusChanged') {
         const markStatus = (arr) => {
           const conversation = arr.find(c => c && c.id == message.conversationId);
@@ -937,6 +960,72 @@ function setupSettingsHandlers() {
         showToast('Erro ao importar backup: ' + err.message, 'error');
       } finally {
         importFileInput.value = '';
+      }
+    });
+  }
+
+  // GitHub Update Check
+  const btnCheckUpdate = document.getElementById('btn-check-github-update');
+  const updateBox = document.getElementById('update-status-box');
+
+  if (btnCheckUpdate && updateBox) {
+    btnCheckUpdate.addEventListener('click', async () => {
+      btnCheckUpdate.disabled = true;
+      const originalHtml = btnCheckUpdate.innerHTML;
+      btnCheckUpdate.innerHTML = 'Verificando...';
+      updateBox.classList.remove('hidden');
+      updateBox.style.background = 'var(--bg-tertiary)';
+      updateBox.style.color = 'var(--text-secondary)';
+      updateBox.style.border = '1px solid var(--border-color)';
+      updateBox.innerHTML = '🔍 Conectando ao repositório GitHub (ricardopimentel/ChatwootExtensao)...';
+
+      try {
+        const manifestUrl = 'https://raw.githubusercontent.com/ricardopimentel/ChatwootExtensao/main/manifest.json';
+        const res = await fetch(manifestUrl, { cache: 'no-store' });
+        
+        if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+        
+        const remoteManifest = await res.json();
+        const remoteVersion = remoteManifest.version || '1.0.0';
+        const localVersion = chrome.runtime.getManifest().version;
+
+        const isNewer = (() => {
+          const rParts = remoteVersion.split('.').map(Number);
+          const lParts = localVersion.split('.').map(Number);
+          for (let i = 0; i < Math.max(rParts.length, lParts.length); i++) {
+            const r = rParts[i] || 0;
+            const l = lParts[i] || 0;
+            if (r > l) return true;
+            if (r < l) return false;
+          }
+          return false;
+        })();
+
+        if (isNewer) {
+          updateBox.style.background = 'rgba(16, 185, 129, 0.12)';
+          updateBox.style.color = 'var(--success)';
+          updateBox.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+          updateBox.innerHTML = `
+            🚀 <strong>Nova versão disponível: v${remoteVersion}</strong> (Sua versão atual: v${localVersion})<br>
+            <span style="font-size: 10px; color: var(--text-primary);">Baixe o arquivo ZIP da versão mais recente no GitHub para atualizar:</span><br>
+            <a href="https://github.com/ricardopimentel/ChatwootExtensao/archive/refs/heads/main.zip" target="_blank" class="btn btn-primary btn-small" style="display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; text-decoration: none; padding: 4px 10px; font-size: 11px;">
+              📥 Baixar ZIP da Atualização (v${remoteVersion})
+            </a>
+          `;
+        } else {
+          updateBox.style.background = 'rgba(37, 99, 235, 0.1)';
+          updateBox.style.color = 'var(--primary-light)';
+          updateBox.style.border = '1px solid rgba(37, 99, 235, 0.3)';
+          updateBox.innerHTML = `✔️ <strong>Você já possui a versão mais recente!</strong> (v${localVersion})`;
+        }
+      } catch (err) {
+        updateBox.style.background = 'rgba(239, 68, 68, 0.1)';
+        updateBox.style.color = 'var(--danger)';
+        updateBox.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+        updateBox.innerHTML = `❌ Não foi possível verificar atualizações: ${err.message}. Verifique sua conexão com o GitHub.`;
+      } finally {
+        btnCheckUpdate.disabled = false;
+        btnCheckUpdate.innerHTML = originalHtml;
       }
     });
   }
@@ -2888,7 +2977,27 @@ function getAvatarContent(contactName, avatarUrl) {
   return initials;
 }
 
-function renderConversationsList(conversations, accountId) {
+function getCurrentlyOpenConversationIds() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({}, (tabs) => {
+      const openIds = new Set();
+      if (Array.isArray(tabs)) {
+        tabs.forEach(tab => {
+          if (tab.url && tab.url.includes('convId=')) {
+            try {
+              const url = new URL(tab.url);
+              const cid = url.searchParams.get('convId');
+              if (cid) openIds.add(String(cid));
+            } catch (e) {}
+          }
+        });
+      }
+      resolve(openIds);
+    });
+  });
+}
+
+async function renderConversationsList(conversations, accountId) {
   try {
     elements.chatsList.innerHTML = '';
 
@@ -2903,12 +3012,13 @@ function renderConversationsList(conversations, accountId) {
       return;
     }
 
+    const openIds = await getCurrentlyOpenConversationIds();
+
     conversations.forEach(item => {
       if (!item) return;
 
-      // Check if conversation is currently open in an active window
-      const activeTimestamp = activeOpenConversationsCache[item.id];
-      const isOpenWindow = activeTimestamp && (Date.now() - activeTimestamp < 30000);
+      // Real-time Chrome tab check: is a window for this conversation ID open in Chrome right now?
+      const isOpenWindow = openIds.has(String(item.id));
 
       if (isOpenWindow) {
         item.unread_count = 0; // Force 0 unread when open in window
@@ -3205,13 +3315,13 @@ function openAppInWindow() {
 }
 
 function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
-  startActiveConversationHeartbeat(conversationId);
-  const targetUrl = chrome.runtime.getURL(`popup.html?convId=${conversationId}`);
+  const strConvId = String(conversationId);
+  startActiveConversationHeartbeat(strConvId);
   
   // Clean unread status in BOTH caches instantly for a premium responsive feel
   const clearUnread = (arr) => {
     if (!Array.isArray(arr)) return;
-    const conversation = arr.find(c => c && c.id === conversationId);
+    const conversation = arr.find(c => c && String(c.id) === strConvId);
     if (conversation) {
       conversation.unread_count = 0;
     }
@@ -3224,6 +3334,7 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
     const card = elements.chatsList.querySelector(`[data-id="${conversationId}"]`);
     if (card) {
       card.classList.remove('unread');
+      card.classList.add('window-active');
       const badge = card.querySelector('.chat-item-badge');
       if (badge) {
         badge.remove();
@@ -3235,26 +3346,53 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
   chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}/update_last_seen`, {
     method: 'POST'
   }).then(() => {
-    // Tell background service worker to refresh the icon badge from API
     chrome.runtime.sendMessage({ action: 'conversationRead' }).catch(() => {});
   }).catch(err => {
     console.error('Error marking conversation as read on click:', err);
   });
 
-  chrome.tabs.query({}, (tabs) => {
-    // Check if a window for this conversation is already open using robust URL detection
-    const existingTab = tabs.find(tab => tab.url && tab.url.includes(`convId=${conversationId}`));
-    if (existingTab) {
-      chrome.tabs.update(existingTab.id, { active: true });
-      chrome.windows.update(existingTab.windowId, { focused: true });
+  // DUAL CHECK TO PREVENT DUPLICATE WINDOWS ACROSS ALL PROFILES:
+  chrome.storage.local.get(['openConversationWindows'], (res) => {
+    const winMap = res.openConversationWindows || {};
+    const winInfo = winMap[strConvId];
+
+    if (winInfo && winInfo.windowId && winInfo.tabId) {
+      chrome.windows.get(winInfo.windowId, (existingWin) => {
+        if (!chrome.runtime.lastError && existingWin) {
+          chrome.tabs.update(winInfo.tabId, { active: true }).catch(() => {});
+          chrome.windows.update(winInfo.windowId, { focused: true }).catch(() => {});
+          return; // Focused existing window! STOP!
+        }
+        
+        // Stale mapping -> remove & fallback to tab query
+        delete winMap[strConvId];
+        chrome.storage.local.set({ openConversationWindows: winMap });
+        findTabAndFocusOrCreate();
+      });
     } else {
-      const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}`);
-      chrome.windows.create({
-        url: url,
-        type: 'popup',
-        width: 380,
-        height: 560,
-        focused: true
+      findTabAndFocusOrCreate();
+    }
+
+    function findTabAndFocusOrCreate() {
+      chrome.tabs.query({}, (tabs) => {
+        const existingTab = Array.isArray(tabs) && tabs.find(tab => {
+          const u = tab.url || tab.pendingUrl || '';
+          return u.includes(`convId=${strConvId}`);
+        });
+
+        if (existingTab) {
+          chrome.tabs.update(existingTab.id, { active: true }).catch(() => {});
+          chrome.windows.update(existingTab.windowId, { focused: true }).catch(() => {});
+        } else {
+          const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}`);
+          chrome.windows.create({
+            url: url,
+            type: 'popup',
+            width: 380,
+            height: 560,
+            focused: true
+          });
+        }
       });
     }
   });

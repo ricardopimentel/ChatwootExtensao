@@ -241,17 +241,25 @@ function subscribeChannels() {
 
 function isConversationActive(conversationId) {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['activeOpenConversations'], (res) => {
-      const activeMap = res.activeOpenConversations || {};
-      const timestamp = activeMap[conversationId];
-      if (timestamp && (Date.now() - timestamp < 30000)) {
-        resolve(true);
-      } else {
-        resolve(false);
-      }
+    chrome.tabs.query({}, (tabs) => {
+      const isOpen = Array.isArray(tabs) && tabs.some(tab => 
+        tab.url && tab.url.includes(`convId=${conversationId}`)
+      );
+      resolve(isOpen);
     });
   });
 }
+
+// Broadcast tab state changes so open popup updates visual tags in real time
+chrome.tabs.onRemoved.addListener(() => {
+  chrome.runtime.sendMessage({ action: 'activeTabsChanged' }).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'complete' || changeInfo.url) {
+    chrome.runtime.sendMessage({ action: 'activeTabsChanged' }).catch(() => {});
+  }
+});
 
 function handleWebSocketMessage(rawData) {
   try {
