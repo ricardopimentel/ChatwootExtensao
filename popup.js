@@ -676,10 +676,15 @@ async function getSettingsFromStorage() {
       const syncData = syncRes?.chatwootSettings;
       chrome.storage.local.get(['chatwootSettings'], (localRes) => {
         const localData = localRes?.chatwootSettings;
-        const merged = (syncData && syncData.url && syncData.token) 
-          ? syncData 
-          : ((localData && localData.url && localData.token) ? localData : (syncData || localData || null));
-        resolve(merged);
+        if (syncData && syncData.url && syncData.token) {
+          chrome.storage.local.set({ chatwootSettings: syncData });
+          return resolve(syncData);
+        }
+        if (localData && localData.url && localData.token) {
+          chrome.storage.sync.set({ chatwootSettings: localData });
+          return resolve(localData);
+        }
+        resolve(syncData || localData || null);
       });
     });
   });
@@ -700,10 +705,22 @@ async function saveSettingsToStorage(newConfig) {
 async function getRemindersFromStorage() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(['chatwootReminders'], (syncRes) => {
-      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : [];
+      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : null;
       chrome.storage.local.get(['chatwootReminders'], (localRes) => {
         const localList = Array.isArray(localRes?.chatwootReminders) ? localRes.chatwootReminders : [];
-        const mergedList = syncList.length >= localList.length ? syncList : localList;
+        let mergedList = [];
+        if (syncList && syncList.length > 0) {
+          const map = new Map();
+          localList.forEach(item => item && item.id && map.set(String(item.id), item));
+          syncList.forEach(item => item && item.id && map.set(String(item.id), item));
+          mergedList = Array.from(map.values());
+        } else {
+          mergedList = localList;
+        }
+        if (mergedList.length > 0) {
+          chrome.storage.sync.set({ chatwootReminders: mergedList });
+          chrome.storage.local.set({ chatwootReminders: mergedList });
+        }
         resolve(mergedList);
       });
     });
@@ -809,6 +826,69 @@ function setupSettingsHandlers() {
       elements.settingsDefaultInbox.innerHTML = '<option value="">Selecione...</option>';
     }
   });
+
+  // Backup Export
+  const btnExport = document.getElementById('btn-export-backup');
+  if (btnExport) {
+    btnExport.addEventListener('click', async () => {
+      try {
+        const settings = await getSettingsFromStorage();
+        const reminders = await getRemindersFromStorage();
+        const backupData = {
+          version: '1.0.0',
+          exportedAt: new Date().toISOString(),
+          settings: settings || {},
+          reminders: reminders || []
+        };
+        const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(backupData, null, 2));
+        const downloadAnchor = document.createElement('a');
+        downloadAnchor.setAttribute('href', dataStr);
+        downloadAnchor.setAttribute('download', `chatwoot_backup_${new Date().toISOString().slice(0, 10)}.json`);
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+        showToast('Backup exportado com sucesso!', 'success');
+      } catch (err) {
+        showToast('Erro ao exportar backup: ' + err.message, 'error');
+      }
+    });
+  }
+
+  // Backup Import
+  const btnImport = document.getElementById('btn-import-backup');
+  const importFileInput = document.getElementById('import-backup-file-input');
+  if (btnImport && importFileInput) {
+    btnImport.addEventListener('click', () => {
+      importFileInput.click();
+    });
+
+    importFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const backup = JSON.parse(text);
+
+        if (backup.settings) {
+          await saveSettingsToStorage(backup.settings);
+          await loadSettings();
+          updateConnectionStatus();
+        }
+
+        if (Array.isArray(backup.reminders)) {
+          await saveRemindersToStorage(backup.reminders);
+          loadReminders();
+        }
+
+        showToast('Backup importado com sucesso!', 'success');
+        chrome.runtime.sendMessage({ action: 'settingsChanged' }).catch(() => {});
+      } catch (err) {
+        showToast('Erro ao importar backup: ' + err.message, 'error');
+      } finally {
+        importFileInput.value = '';
+      }
+    });
+  }
 }
 
 // Global CSP-compliant avatar image error handler
@@ -5599,31 +5679,33 @@ async function loadReportsDashboard(silent = false) {
     }
     breakdownItems.sort((a, b) => b.count - a.count);
 
-    elements.reportValMessages.textContent = messagesSent;
-    elements.reportValReplied.textContent = repliedCount;
-    elements.reportValResolved.textContent = resolvedCount;
-    elements.reportValOpen.textContent = openCount;
+    if (elements.reportValMessages) elements.reportValMessages.textContent = messagesSent;
+    if (elements.reportValReplied) elements.reportValReplied.textContent = repliedCount;
+    if (elements.reportValResolved) elements.reportValResolved.textContent = resolvedCount;
+    if (elements.reportValOpen) elements.reportValOpen.textContent = openCount;
 
-    elements.reportInboxBreakdown.innerHTML = '';
-    if (breakdownItems.length === 0) {
-      elements.reportInboxBreakdown.innerHTML = `<div style="text-align: center; font-size: 11px; color: var(--text-muted); padding: 10px 0;">Nenhuma conversa ativa com você por caixa de entrada no período.</div>`;
-    } else {
-      const maxCount = breakdownItems[0].count || 1;
-      breakdownItems.forEach(item => {
-        const percentage = Math.round((item.count / maxCount) * 100);
-        const itemEl = document.createElement('div');
-        itemEl.className = 'report-breakdown-item';
-        itemEl.innerHTML = `
-          <div class="report-breakdown-info">
-            <span class="report-breakdown-name">${item.name}</span>
-            <span class="report-breakdown-count">${item.count} ${item.count === 1 ? 'atendimento' : 'atendimentos'}</span>
-          </div>
-          <div class="report-breakdown-bar-bg">
-            <div class="report-breakdown-bar-fill" style="width: ${percentage}%"></div>
-          </div>
-        `;
-        elements.reportInboxBreakdown.appendChild(itemEl);
-      });
+    if (elements.reportInboxBreakdown) {
+      elements.reportInboxBreakdown.innerHTML = '';
+      if (breakdownItems.length === 0) {
+        elements.reportInboxBreakdown.innerHTML = `<div style="text-align: center; font-size: 11px; color: var(--text-muted); padding: 10px 0;">Nenhuma conversa ativa com você por caixa de entrada no período.</div>`;
+      } else {
+        const maxCount = breakdownItems[0].count || 1;
+        breakdownItems.forEach(item => {
+          const percentage = Math.round((item.count / maxCount) * 100);
+          const itemEl = document.createElement('div');
+          itemEl.className = 'report-breakdown-item';
+          itemEl.innerHTML = `
+            <div class="report-breakdown-info">
+              <span class="report-breakdown-name">${item.name}</span>
+              <span class="report-breakdown-count">${item.count} ${item.count === 1 ? 'atendimento' : 'atendimentos'}</span>
+            </div>
+            <div class="report-breakdown-bar-bg">
+              <div class="report-breakdown-bar-fill" style="width: ${percentage}%"></div>
+            </div>
+          `;
+          elements.reportInboxBreakdown.appendChild(itemEl);
+        });
+      }
     }
 
     let insightText = '';
@@ -5654,7 +5736,10 @@ async function loadReportsDashboard(silent = false) {
         insightText += `<br><br>👍 <strong>Bom trabalho!</strong> Continue prestando suporte de excelência aos clientes.`;
       }
     }
-    elements.reportProductivityText.innerHTML = insightText;
+
+    if (elements.reportProductivityText) {
+      elements.reportProductivityText.innerHTML = insightText;
+    }
 
     currentReportData = {
       messagesSent,
@@ -5666,9 +5751,9 @@ async function loadReportsDashboard(silent = false) {
     };
 
     hideReportsProgress();
-    elements.reportsContentLoading.classList.add('hidden');
-    elements.reportsContentError.classList.add('hidden');
-    elements.reportsContentArea.classList.remove('hidden');
+    if (elements.reportsContentLoading) elements.reportsContentLoading.classList.add('hidden');
+    if (elements.reportsContentError) elements.reportsContentError.classList.add('hidden');
+    if (elements.reportsContentArea) elements.reportsContentArea.classList.remove('hidden');
 
   } catch (err) {
     console.error('Error loading reports dashboard:', err);

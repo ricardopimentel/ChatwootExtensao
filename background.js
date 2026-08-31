@@ -63,10 +63,15 @@ async function getSettingsFromStorage() {
       const syncData = syncRes?.chatwootSettings;
       chrome.storage.local.get(['chatwootSettings'], (localRes) => {
         const localData = localRes?.chatwootSettings;
-        const merged = (syncData && syncData.url && syncData.token) 
-          ? syncData 
-          : ((localData && localData.url && localData.token) ? localData : (syncData || localData || null));
-        resolve(merged);
+        if (syncData && syncData.url && syncData.token) {
+          chrome.storage.local.set({ chatwootSettings: syncData });
+          return resolve(syncData);
+        }
+        if (localData && localData.url && localData.token) {
+          chrome.storage.sync.set({ chatwootSettings: localData });
+          return resolve(localData);
+        }
+        resolve(syncData || localData || null);
       });
     });
   });
@@ -75,10 +80,22 @@ async function getSettingsFromStorage() {
 async function getRemindersFromStorage() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(['chatwootReminders'], (syncRes) => {
-      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : [];
+      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : null;
       chrome.storage.local.get(['chatwootReminders'], (localRes) => {
         const localList = Array.isArray(localRes?.chatwootReminders) ? localRes.chatwootReminders : [];
-        const mergedList = syncList.length >= localList.length ? syncList : localList;
+        let mergedList = [];
+        if (syncList && syncList.length > 0) {
+          const map = new Map();
+          localList.forEach(item => item && item.id && map.set(String(item.id), item));
+          syncList.forEach(item => item && item.id && map.set(String(item.id), item));
+          mergedList = Array.from(map.values());
+        } else {
+          mergedList = localList;
+        }
+        if (mergedList.length > 0) {
+          chrome.storage.sync.set({ chatwootReminders: mergedList });
+          chrome.storage.local.set({ chatwootReminders: mergedList });
+        }
         resolve(mergedList);
       });
     });

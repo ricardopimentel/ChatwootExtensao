@@ -640,6 +640,23 @@
             </button>
           </div>
         </form>
+
+        <!-- Section: Backup & Export -->
+        <div class="settings-backup-section" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+          <h3 class="section-title" style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">📦 Backup & Sincronização Manual</h3>
+          <p class="helper-text" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px;">Exporte ou importe um arquivo de backup (`.json`) para transferir suas configurações e lembretes para qualquer outro computador.</p>
+          <div class="form-row">
+            <button type="button" id="btn-export-backup" class="btn btn-secondary half" style="font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              Exportar Backup (.json)
+            </button>
+            <button type="button" id="btn-import-backup" class="btn btn-secondary half" style="font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Importar Backup (.json)
+            </button>
+            <input type="file" id="import-backup-file-input" accept=".json" class="hidden">
+          </div>
+        </div>
       </section>
 
     </main>
