@@ -827,6 +827,57 @@ function setupSettingsHandlers() {
     }
   });
 
+  // Quick Sync Code Copy
+  const btnCopySyncCode = document.getElementById('btn-copy-sync-code');
+  if (btnCopySyncCode) {
+    btnCopySyncCode.addEventListener('click', async () => {
+      try {
+        const settings = await getSettingsFromStorage();
+        const reminders = await getRemindersFromStorage();
+        const payload = { settings: settings || {}, reminders: reminders || [] };
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+        await navigator.clipboard.writeText(b64);
+        showToast('Código de sincronização copiado! 📋', 'success');
+      } catch (err) {
+        showToast('Erro ao gerar código de sincronização: ' + err.message, 'error');
+      }
+    });
+  }
+
+  // Quick Sync Code Apply
+  const btnApplySyncCode = document.getElementById('btn-apply-sync-code');
+  const syncCodeInput = document.getElementById('sync-code-input');
+  if (btnApplySyncCode && syncCodeInput) {
+    btnApplySyncCode.addEventListener('click', async () => {
+      const code = syncCodeInput.value.trim();
+      if (!code) {
+        showToast('Por favor, cole o código de sincronização no campo.', 'error');
+        return;
+      }
+      try {
+        const jsonStr = decodeURIComponent(escape(atob(code)));
+        const payload = JSON.parse(jsonStr);
+
+        if (payload.settings) {
+          await saveSettingsToStorage(payload.settings);
+          await loadSettings();
+          updateConnectionStatus();
+        }
+
+        if (Array.isArray(payload.reminders)) {
+          await saveRemindersToStorage(payload.reminders);
+          loadReminders();
+        }
+
+        showToast('Sincronização concluída com sucesso! 🎉', 'success');
+        syncCodeInput.value = '';
+        chrome.runtime.sendMessage({ action: 'settingsChanged' }).catch(() => {});
+      } catch (err) {
+        showToast('Código de sincronização inválido ou corrompido.', 'error');
+      }
+    });
+  }
+
   // Backup Export
   const btnExport = document.getElementById('btn-export-backup');
   if (btnExport) {

@@ -641,10 +641,31 @@
           </div>
         </form>
 
+        <!-- Section: Quick Sync Code -->
+        <div class="settings-quick-sync-section" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+          <h3 class="section-title" style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">⚡ Sincronização Rápida entre PCs</h3>
+          <p class="helper-text" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px;">Gere um código de sincronização no computador principal e cole no outro computador para carregar todas as configurações e lembretes instantaneamente.</p>
+          
+          <div class="form-group" style="margin-bottom: 10px;">
+            <div class="form-row">
+              <input type="text" id="sync-code-input" placeholder="Cole o código de sincronização aqui..." style="flex: 1; font-size: 11px; font-family: monospace;">
+              <button type="button" id="btn-apply-sync-code" class="btn btn-primary btn-small" style="font-size: 11px; padding: 0 14px; white-space: nowrap;">
+                Aplicar Código
+              </button>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="btn-copy-sync-code" class="btn btn-secondary btn-small" style="font-size: 11px; flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              📋 Copiar Código de Sincronização
+            </button>
+          </div>
+        </div>
+
         <!-- Section: Backup & Export -->
-        <div class="settings-backup-section" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
-          <h3 class="section-title" style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">📦 Backup & Sincronização Manual</h3>
-          <p class="helper-text" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px;">Exporte ou importe um arquivo de backup (`.json`) para transferir suas configurações e lembretes para qualquer outro computador.</p>
+        <div class="settings-backup-section" style="margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--border-color);">
+          <h3 class="section-title" style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">📦 Backup & Arquivo JSON</h3>
+          <p class="helper-text" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px;">Exporte ou importe um arquivo de backup (`.json`) completo.</p>
           <div class="form-row">
             <button type="button" id="btn-export-backup" class="btn btn-secondary half" style="font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
