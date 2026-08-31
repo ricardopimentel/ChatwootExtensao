@@ -85,6 +85,32 @@ body {
   margin-top: -1px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-icon-header {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-icon-header:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: rgba(31, 147, 255, 0.4);
+}
+
 .status-indicator {
   width: 10px;
   height: 10px;
@@ -2470,6 +2496,26 @@ textarea {
 /* ==========================================
    CHAT WINDOW MODE STYLES (GMAIL STYLE FLOATING CHAT)
    ========================================== */
+
+body.standalone-app-mode {
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 380px !important;
+  min-height: 500px !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body.standalone-app-mode .app-container {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+}
+
+body.standalone-app-mode #btn-app-popout {
+  display: none !important;
+}
 
 body.chat-window-mode {
   width: 100vw !important;

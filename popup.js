@@ -148,6 +148,7 @@ const elements = {
   chatsDetailView: document.querySelector('.chats-detail-view'),
   btnChatBack: document.getElementById('btn-chat-back'),
   btnChatPopout: document.getElementById('btn-chat-popout'),
+  btnAppPopout: document.getElementById('btn-app-popout'),
   chatHeaderAvatar: document.getElementById('chat-header-avatar'),
   chatHeaderName: document.getElementById('chat-header-name'),
   chatHeaderMeta: document.getElementById('chat-header-meta'),
@@ -159,8 +160,13 @@ const elements = {
 // INITIALIZATION
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    // Detect if running in separate chat window mode
+    // Detect if running in standalone full-app window mode or separate chat mode
     const urlParams = new URLSearchParams(window.location.search);
+    const isStandaloneApp = urlParams.get('mode') === 'standaloneApp';
+    if (isStandaloneApp) {
+      document.body.classList.add('standalone-app-mode');
+    }
+
     const paramConvId = urlParams.get('convId');
     if (paramConvId) {
       isChatWindowMode = true;
@@ -170,6 +176,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       startActiveConversationHeartbeat(paramConvId);
       window.addEventListener('beforeunload', () => {
         stopActiveConversationHeartbeat(paramConvId);
+      });
+    }
+
+    if (elements.btnAppPopout) {
+      elements.btnAppPopout.addEventListener('click', () => {
+        openAppInWindow();
       });
     }
 
@@ -3027,6 +3039,27 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
       loadChatMessages(accountId, conversationId, true);
     }
   }, 4000);
+}
+
+function openAppInWindow() {
+  chrome.tabs.query({}, (tabs) => {
+    const existing = tabs.find(t => t.url && t.url.includes('mode=standaloneApp'));
+    if (existing) {
+      chrome.windows.update(existing.windowId, { focused: true });
+      chrome.tabs.update(existing.id, { active: true });
+      window.close();
+    } else {
+      chrome.windows.create({
+        url: chrome.runtime.getURL('popup.html?mode=standaloneApp'),
+        type: 'popup',
+        width: 420,
+        height: 600,
+        focused: true
+      }, () => {
+        window.close();
+      });
+    }
+  });
 }
 
 function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
