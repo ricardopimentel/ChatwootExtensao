@@ -3872,13 +3872,13 @@ function setupLightboxHandlers() {
 function formatWhatsAppMarkdown(text) {
   if (!text) return '';
 
-  // Normalize HTML entity equivalents for markdown symbols that might be returned by Chatwoot backend
+  // Decode decimal, hex, and named HTML entities for markdown characters
   let formatted = text
-    .replace(/&#42;/g, '*')
+    .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => String.fromCharCode(parseInt(hex, 16)))
     .replace(/&ast;/g, '*')
-    .replace(/&#95;/g, '_')
-    .replace(/&#126;/g, '~')
-    .replace(/&#96;/g, '`');
+    .replace(/&tilde;/g, '~')
+    .replace(/&lowbar;/g, '_');
 
   const hasHtml = /<[a-z/][^>]*>/i.test(formatted);
 
@@ -3895,13 +3895,16 @@ function formatWhatsAppMarkdown(text) {
     formatted = formatted.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="chat-msg-link" rel="noopener noreferrer">$1</a>');
   }
 
-  // Bold: *text* -> <strong>text</strong>
+  // Bold (Double and Single): **text** or *text* -> <strong>text</strong>
+  formatted = formatted.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
   formatted = formatted.replace(/\*([^*]+?)\*/g, '<strong>$1</strong>');
 
-  // Italic: _text_ -> <em>text</em>
+  // Italic (Double and Single): __text__ or _text_ -> <em>text</em>
+  formatted = formatted.replace(/__([^_]+?)__/g, '<em>$1</em>');
   formatted = formatted.replace(/_([^_]+?)_/g, '<em>$1</em>');
 
-  // Strikethrough: ~text~ -> <del>text</del>
+  // Strikethrough (Double and Single): ~~text~~ or ~text~ -> <del>text</del>
+  formatted = formatted.replace(/~~([^~]+?)~~/g, '<del>$1</del>');
   formatted = formatted.replace(/~([^~]+?)~/g, '<del>$1</del>');
 
   // Monospace/Code: `text` -> <code>text</code>
