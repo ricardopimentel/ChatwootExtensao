@@ -59,10 +59,6 @@
           </div>
           
           <div class="chats-filter-bar">
-            <button class="filter-chip" data-filter="new" id="btn-filter-new">
-              Novas
-              <span class="filter-badge hidden" id="badge-filter-new">0</span>
-            </button>
             <button class="filter-chip active" data-filter="progress" id="btn-filter-progress">
               Em Atendimento
               <span class="filter-badge hidden" id="badge-filter-progress">0</span>
@@ -412,40 +408,182 @@
 
       <!-- Tab: New Chat -->
       <section id="new-chat" class="tab-pane">
-        <form id="new-chat-form" class="app-form">
-          <div class="form-group">
-            <label for="new-chat-account">Conta Chatwoot</label>
-            <select id="new-chat-account" required>
-              <option value="">Carregando contas...</option>
-            </select>
-          </div>
+        <!-- Sub-tabs bar -->
+        <div class="sub-tabs-bar">
+          <button type="button" class="sub-tab-btn active" data-subtab="individual" id="subtab-btn-individual">
+            📱 Chat Individual
+          </button>
+          <button type="button" class="sub-tab-btn" data-subtab="bulk" id="subtab-btn-bulk">
+            🚀 Envio em Massa (CSV)
+          </button>
+        </div>
 
-          <div class="form-group">
-            <label for="new-chat-inbox">Canal / Caixa de Entrada</label>
-            <select id="new-chat-inbox" required>
-              <option value="">Selecione uma conta primeiro...</option>
-            </select>
-            <span class="helper-text warning-text hidden" id="inbox-channel-warning">Esse canal pode não suportar início de conversa ativo.</span>
-          </div>
+        <!-- Sub-pane 1: Individual Chat -->
+        <div id="subpane-individual" class="sub-tab-pane">
+          <form id="new-chat-form" class="app-form">
+            <div class="form-group">
+              <label for="new-chat-account">Conta Chatwoot</label>
+              <select id="new-chat-account" required>
+                <option value="">Carregando contas...</option>
+              </select>
+            </div>
 
-          <div class="form-group">
-            <label for="new-chat-phone">Número de Telefone</label>
-            <input type="tel" id="new-chat-phone" placeholder="Ex: +55 (11) 99999-9999" required>
-            <span class="helper-text">Insira o código do país + DDD + número (somente dígitos).</span>
-          </div>
+            <div class="form-group">
+              <label for="new-chat-inbox">Canal / Caixa de Entrada</label>
+              <select id="new-chat-inbox" required>
+                <option value="">Selecione uma conta primeiro...</option>
+              </select>
+              <span class="helper-text warning-text hidden" id="inbox-channel-warning">Esse canal pode não suportar início de conversa ativo.</span>
+            </div>
 
-          <div class="form-group">
-            <label for="new-chat-name">Nome do Contato</label>
-            <input type="text" id="new-chat-name" placeholder="Ex: João Silva (Será criado se não existir)">
-          </div>
+            <div class="form-group">
+              <label for="new-chat-phone">Número de Telefone</label>
+              <input type="tel" id="new-chat-phone" placeholder="Ex: +55 (11) 99999-9999" required>
+              <span class="helper-text">Insira o código do país + DDD + número (somente dígitos).</span>
+            </div>
 
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary" id="btn-start-chat">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-              Iniciar Conversa
-            </button>
-          </div>
-        </form>
+            <div class="form-group">
+              <label for="new-chat-name">Nome do Contato</label>
+              <input type="text" id="new-chat-name" placeholder="Ex: João Silva (Será criado se não existir)">
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="btn-start-chat">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                Iniciar Conversa
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Sub-pane 2: Bulk Messaging (CSV) -->
+        <div id="subpane-bulk" class="sub-tab-pane hidden">
+          <form id="bulk-chat-form" class="app-form">
+            <div class="form-group">
+              <label for="bulk-chat-account">Conta Chatwoot</label>
+              <select id="bulk-chat-account" required>
+                <option value="">Carregando contas...</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="bulk-chat-inbox">Canal / Caixa de Entrada</label>
+              <select id="bulk-chat-inbox" required>
+                <option value="">Selecione uma conta primeiro...</option>
+              </select>
+            </div>
+
+            <!-- CSV Upload Dropzone -->
+            <div class="form-group">
+              <label>Arquivo CSV de Contatos</label>
+              <div class="csv-drop-zone" id="csv-drop-zone">
+                <input type="file" id="csv-file-input" accept=".csv,text/csv" class="hidden">
+                <div class="csv-drop-content" id="csv-drop-content">
+                  <div class="csv-drop-icon">📁</div>
+                  <p class="csv-drop-title">Clique para selecionar ou arraste o arquivo .CSV aqui</p>
+                  <p class="csv-drop-subtitle">O arquivo deve conter colunas com <strong>Nome</strong> e <strong>Telefone</strong></p>
+                </div>
+              </div>
+              <div class="csv-loaded-badge hidden" id="csv-loaded-badge">
+                <span id="csv-filename-text">contatos.csv</span>
+                <button type="button" id="btn-remove-csv" class="btn-remove-csv-icon" title="Remover arquivo">&times;</button>
+              </div>
+            </div>
+
+            <!-- CSV Preview Table Container -->
+            <div class="csv-preview-container hidden" id="csv-preview-container">
+              <div class="csv-preview-header">
+                <span>Contatos Identificados (<strong id="csv-contacts-count">0</strong>)</span>
+              </div>
+              <div class="csv-preview-scroll">
+                <table class="csv-preview-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Nome</th>
+                      <th>Telefone</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="csv-contacts-tbody">
+                    <!-- Populated dynamically -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Message Template Area -->
+            <div class="form-group" style="margin-top: 14px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label for="bulk-message-template" style="margin-bottom: 0;">Texto da Mensagem</label>
+                <div class="template-vars-chips">
+                  <button type="button" class="chip-var" data-var="{saudacao}" title="Insere Bom dia / Boa tarde / Boa noite conforme horário">{saudacao}</button>
+                  <button type="button" class="chip-var" data-var="{nome}" title="Insere o nome da pessoa">{nome}</button>
+                  <button type="button" class="chip-var" data-var="{telefone}" title="Insere o número do telefone">{telefone}</button>
+                </div>
+              </div>
+              <textarea id="bulk-message-template" rows="4" placeholder="Ex: {saudacao}, {nome}! Temos uma promoção especial para você hoje..."></textarea>
+              <span class="helper-text">O texto personalizado pode incluir as variáveis acima. O sistema aplicará a saudação dinâmica baseada no horário do disparo.</span>
+            </div>
+
+            <!-- Live Message Preview Box -->
+            <div class="bulk-message-preview-card" id="bulk-message-preview-card">
+              <div class="preview-card-header">👁️ Pré-visualização do primeiro envio:</div>
+              <div class="preview-card-body" id="bulk-message-preview-text">
+                <em>Selecione um arquivo CSV e digite a mensagem...</em>
+              </div>
+            </div>
+
+            <!-- Anti-Ban & Meta Compliance Settings -->
+            <div class="info-card" style="margin-top: 14px; background: rgba(59, 130, 246, 0.08); border-color: rgba(59, 130, 246, 0.25);">
+              <div class="card-body" style="padding: 10px 12px;">
+                <h4 style="margin: 0 0 6px 0; font-size: 11.5px; color: var(--primary-color); display: flex; align-items: center; gap: 6px;">
+                  🛡️ Proteção Anti-Bloqueio (Segurança Meta / WhatsApp)
+                </h4>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                  <div style="flex: 1; min-width: 130px;">
+                    <label style="font-size: 10px; color: var(--text-secondary);">Delay entre mensagens (seg):</label>
+                    <div style="display: flex; gap: 4px; align-items: center; margin-top: 2px;">
+                      <input type="number" id="bulk-delay-min" value="15" min="5" max="120" style="width: 50px; padding: 3px 6px; font-size: 11px;">
+                      <span style="font-size: 10px; color: var(--text-secondary);">a</span>
+                      <input type="number" id="bulk-delay-max" value="30" min="5" max="180" style="width: 50px; padding: 3px 6px; font-size: 11px;">
+                    </div>
+                  </div>
+                  <div style="flex: 1; min-width: 130px;">
+                    <label style="font-size: 10px; color: var(--text-secondary);">Pausa a cada 10 mensagens:</label>
+                    <input type="number" id="bulk-batch-pause" value="60" min="10" max="600" style="width: 65px; padding: 3px 6px; font-size: 11px; margin-top: 2px;">
+                    <span style="font-size: 10px; color: var(--text-secondary);">seg</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Execution Status & Controls -->
+            <div class="bulk-execution-area hidden" id="bulk-execution-area" style="margin-top: 14px;">
+              <div class="bulk-progress-header">
+                <span id="bulk-progress-label">Enviando: 0 / 0</span>
+                <span id="bulk-timer-label" class="bulk-timer-badge">Aguardando...</span>
+              </div>
+              <div class="bulk-progress-track">
+                <div class="bulk-progress-fill" id="bulk-progress-fill" style="width: 0%;"></div>
+              </div>
+              <div class="bulk-log-box" id="bulk-log-box"></div>
+            </div>
+
+            <!-- Actions Buttons -->
+            <div class="form-actions" style="margin-top: 14px; display: flex; gap: 8px;">
+              <button type="button" class="btn btn-primary" id="btn-start-bulk" style="flex: 2;">
+                🚀 Iniciar Envio em Massa
+              </button>
+              <button type="button" class="btn btn-secondary hidden" id="btn-pause-bulk" style="flex: 1;">
+                ⏸️ Pausar
+              </button>
+              <button type="button" class="btn btn-secondary hidden" id="btn-cancel-bulk" style="flex: 1; color: var(--danger);">
+                🛑 Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
       </section>
 
       <!-- Tab: Settings -->

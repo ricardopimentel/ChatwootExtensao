@@ -42,6 +42,12 @@ let recordingTimerInterval = null;
 let replyParentMessageId = null;
 let editParentMessageId = null;
 
+// Bulk Messaging state
+let bulkContactsList = [];
+let isBulkRunning = false;
+let isBulkPaused = false;
+let isBulkCancelled = false;
+
 // DOM SELECTORS
 const elements = {
   // Tabs
@@ -91,6 +97,35 @@ const elements = {
   newChatInbox: document.getElementById('new-chat-inbox'),
   inboxWarning: document.getElementById('inbox-channel-warning'),
   
+  // Bulk Messaging Selectors
+  subpaneIndividual: document.getElementById('subpane-individual'),
+  subpaneBulk: document.getElementById('subpane-bulk'),
+  bulkChatForm: document.getElementById('bulk-chat-form'),
+  bulkChatAccount: document.getElementById('bulk-chat-account'),
+  bulkChatInbox: document.getElementById('bulk-chat-inbox'),
+  csvDropZone: document.getElementById('csv-drop-zone'),
+  csvFileInput: document.getElementById('csv-file-input'),
+  csvLoadedBadge: document.getElementById('csv-loaded-badge'),
+  csvFilenameText: document.getElementById('csv-filename-text'),
+  btnRemoveCsv: document.getElementById('btn-remove-csv'),
+  csvPreviewContainer: document.getElementById('csv-preview-container'),
+  csvContactsCount: document.getElementById('csv-contacts-count'),
+  csvContactsTbody: document.getElementById('csv-contacts-tbody'),
+  bulkMessageTemplate: document.getElementById('bulk-message-template'),
+  bulkMessagePreviewCard: document.getElementById('bulk-message-preview-card'),
+  bulkMessagePreviewText: document.getElementById('bulk-message-preview-text'),
+  bulkDelayMin: document.getElementById('bulk-delay-min'),
+  bulkDelayMax: document.getElementById('bulk-delay-max'),
+  bulkBatchPause: document.getElementById('bulk-batch-pause'),
+  bulkExecutionArea: document.getElementById('bulk-execution-area'),
+  bulkProgressLabel: document.getElementById('bulk-progress-label'),
+  bulkTimerLabel: document.getElementById('bulk-timer-label'),
+  bulkProgressFill: document.getElementById('bulk-progress-fill'),
+  bulkLogBox: document.getElementById('bulk-log-box'),
+  btnStartBulk: document.getElementById('btn-start-bulk'),
+  btnPauseBulk: document.getElementById('btn-pause-bulk'),
+  btnCancelBulk: document.getElementById('btn-cancel-bulk'),
+  
   // Tab: Settings
   settingsForm: document.getElementById('settings-form'),
   settingsUrl: document.getElementById('settings-url'),
@@ -123,120 +158,167 @@ const elements = {
 
 // INITIALIZATION
 document.addEventListener('DOMContentLoaded', async () => {
-  // Detect if running in separate chat window mode
-  const urlParams = new URLSearchParams(window.location.search);
-  const paramConvId = urlParams.get('convId');
-  if (paramConvId) {
-    isChatWindowMode = true;
-    document.body.classList.add('chat-window-mode');
-    const contactName = urlParams.get('contactName') || 'Cliente';
-    document.title = `${contactName} - Chatwoot`;
-  }
+  try {
+    // Detect if running in separate chat window mode
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramConvId = urlParams.get('convId');
+    if (paramConvId) {
+      isChatWindowMode = true;
+      document.body.classList.add('chat-window-mode');
+      const contactName = urlParams.get('contactName') || 'Cliente';
+      document.title = `${contactName} - Chatwoot`;
+      startActiveConversationHeartbeat(paramConvId);
+      window.addEventListener('beforeunload', () => {
+        stopActiveConversationHeartbeat(paramConvId);
+      });
+    }
 
-  // Load saved settings
-  await loadSettings();
+    // Setup tab navigation & event listeners first
+    setupTabs();
+    setupSettingsHandlers();
+    setupTagHandlers();
+    setupReportsHandlers();
+    setupLightboxHandlers();
+    setupContextMenuHandlers();
+    setupBulkMessaging();
 
-  // Retrieve user profile to establish currentUserId globally
-  if (config.url && config.token) {
-    chatwootFetch('/api/v1/profile').then(profile => {
-      if (profile) {
-        currentUserId = profile.id;
+    // Close buttons
+    const btnReplyPreviewClose = document.getElementById('btn-reply-preview-close');
+    if (btnReplyPreviewClose) {
+      btnReplyPreviewClose.addEventListener('click', (e) => {
+        e.preventDefault();
+        cancelMessageReply();
+      });
+    }
+    const btnEditPreviewClose = document.getElementById('btn-edit-preview-close');
+    if (btnEditPreviewClose) {
+      btnEditPreviewClose.addEventListener('click', (e) => {
+        e.preventDefault();
+        cancelMessageEdit();
+      });
+    }
+
+    // Dismiss context menu
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('msg-context-menu');
+      if (menu && !menu.classList.contains('hidden')) {
+        if (!e.target.closest('.btn-msg-menu') && !e.target.closest('#msg-context-menu')) {
+          menu.classList.add('hidden');
+        }
       }
-    }).catch(err => console.warn('Could not load profile on init:', err));
-  }
-  
-  // Setup tab navigation
-  setupTabs();
-  
-  // Setup settings features
-  setupSettingsHandlers();
-  
-  // Setup tag features
-  setupTagHandlers();
-  
-  // Setup reports features
-  setupReportsHandlers();
+    });
 
-  // Check active tab and adjust UI
-  await checkActiveTab();
-  
-  // Load saved reminders
-  loadReminders();
-  
-  // Real-time WebSocket and interaction event listener from background.js/popup.js
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.action === 'newMessageReceived' || message.action === 'messageSentByAgent') {
-      // Find the conversation in the open cache
-      const convInCache = openConversationsCache.find(c => c && c.id == message.conversationId);
+    // Real-time WebSocket and interaction event listener
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message.action === 'newMessageReceived' || message.action === 'newMessageReceivedInActiveChat' || message.action === 'messageSentByAgent') {
+        const convId = message.conversationId;
+        const convInCache = openConversationsCache.find(c => c && c.id == convId);
+        const inFetched = fetchedConversations.find(c => c && c.id == convId);
 
-      if (message.action === 'newMessageReceived') {
-        if (convInCache) {
-          // Increment unread count for this conversation in both caches
-          convInCache.unread_count = (convInCache.unread_count || 0) + 1;
-          const inFetched = fetchedConversations.find(c => c && c.id == message.conversationId);
-          if (inFetched) inFetched.unread_count = convInCache.unread_count;
+        if (message.action === 'newMessageReceivedInActiveChat') {
+          if (convInCache) convInCache.unread_count = 0;
+          if (inFetched) inFetched.unread_count = 0;
+          
+          if (elements.chatsList) {
+            const card = elements.chatsList.querySelector(`[data-id="${convId}"]`);
+            if (card) {
+              card.classList.remove('unread');
+              const badge = card.querySelector('.chat-item-badge');
+              if (badge) badge.remove();
+            }
+          }
           updateUnreadBadgeLocal();
           filterAndRenderConversations();
-        } else {
-          // Conversation not in cache — do a full reload to fetch it
-          loadConversations();
+        } else if (message.action === 'newMessageReceived') {
+          if (convInCache) {
+            convInCache.unread_count = (convInCache.unread_count || 0) + 1;
+            if (inFetched) inFetched.unread_count = convInCache.unread_count;
+            updateUnreadBadgeLocal();
+            filterAndRenderConversations();
+          } else {
+            loadConversations();
+          }
+        } else if (message.action === 'messageSentByAgent') {
+          const updateConv = (arr) => {
+            const conversation = arr.find(c => c && c.id == message.conversationId);
+            if (conversation) {
+              if (!conversation.first_reply_created_at) {
+                conversation.first_reply_created_at = Math.floor(Date.now() / 1000);
+              }
+              conversation.unread_count = 0;
+            }
+          };
+          updateConv(openConversationsCache);
+          updateConv(fetchedConversations);
+          updateUnreadBadgeLocal();
+          filterAndRenderConversations();
         }
-      } else if (message.action === 'messageSentByAgent') {
-        // Update both caches to keep them in sync
-        const updateConv = (arr) => {
+
+        if (currentActiveChat && message.conversationId == currentActiveChat.id) {
+          loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
+        }
+      } else if (message.action === 'conversationStatusChanged') {
+        const markStatus = (arr) => {
           const conversation = arr.find(c => c && c.id == message.conversationId);
           if (conversation) {
-            if (!conversation.first_reply_created_at) {
-              conversation.first_reply_created_at = Math.floor(Date.now() / 1000);
-            }
-            conversation.unread_count = 0;
+            conversation.status = message.status;
           }
         };
-        updateConv(openConversationsCache);
-        updateConv(fetchedConversations);
+        markStatus(openConversationsCache);
+        markStatus(fetchedConversations);
         updateUnreadBadgeLocal();
         filterAndRenderConversations();
       }
+    });
 
-      // Message bubbles update
-      if (currentActiveChat && message.conversationId == currentActiveChat.id) {
-        loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
-      }
-    } else if (message.action === 'conversationStatusChanged') {
-      // Mark conversation as resolved in openConversationsCache so it disappears from new/progress filters
-      const markStatus = (arr) => {
-        const conversation = arr.find(c => c && c.id == message.conversationId);
-        if (conversation) {
-          conversation.status = message.status;
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (isSelfSavingStorage) return;
+      if (namespace === 'sync' || namespace === 'local') {
+        if (changes.chatwootReminders) {
+          loadReminders(elements.searchInput?.value || '');
         }
-      };
-      markStatus(openConversationsCache);
-      markStatus(fetchedConversations);
-
-      // Update local unread counter and badges
-      updateUnreadBadgeLocal();
-
-      // Trigger live re-filtering and rendering of the conversations list
-      filterAndRenderConversations();
-    }
-  });
-
-  chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'sync') {
-      if (changes.chatwootReminders) {
-        loadReminders(elements.searchInput.value);
+        if (changes.chatwootSettings) {
+          loadSettings().then(() => {
+            updateConnectionStatus();
+          });
+        }
+        if (changes.activeOpenConversations) {
+          activeOpenConversationsCache = changes.activeOpenConversations.newValue || {};
+          filterAndRenderConversations();
+        }
       }
-      if (changes.chatwootSettings) {
-        loadSettings().then(() => {
-          updateConnectionStatus();
-        });
-      }
+    });
+
+    chrome.storage.local.get(['activeOpenConversations'], (res) => {
+      activeOpenConversationsCache = res.activeOpenConversations || {};
+    });
+
+    // Load settings safely
+    try {
+      await loadSettings();
+      updateConnectionStatus();
+    } catch (err) {
+      console.warn('loadSettings error:', err);
     }
-  });
+
+    if (config.url && config.token) {
+      chatwootFetch('/api/v1/profile').then(profile => {
+        if (profile) currentUserId = profile.id;
+      }).catch(err => console.warn('Could not load profile on init:', err));
+    }
+
+    // Restore last navigation state (loads conversations list)
+    restoreNavigationState();
+
+    // Check active tab and load reminders
+    checkActiveTab().catch(err => console.warn('checkActiveTab error:', err));
+    loadReminders();
+
+  } catch (err) {
+    console.error('Critical initialization error in DOMContentLoaded:', err);
+  }
+});
   
-  // Initialize connection state check
-  updateConnectionStatus();
-
   // Setup search filter
   elements.searchInput.addEventListener('input', (e) => {
     loadReminders(e.target.value);
@@ -496,43 +578,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Restore last navigation state (tab + open conversation if any)
-  restoreNavigationState();
-
   // Setup Lightbox Modal events
   setupLightboxHandlers();
-
-  // Close reply preview bar
-  const btnReplyPreviewClose = document.getElementById('btn-reply-preview-close');
-  if (btnReplyPreviewClose) {
-    btnReplyPreviewClose.addEventListener('click', (e) => {
-      e.preventDefault();
-      cancelMessageReply();
-    });
-  }
-
-  // Close edit preview bar
-  const btnEditPreviewClose = document.getElementById('btn-edit-preview-close');
-  if (btnEditPreviewClose) {
-    btnEditPreviewClose.addEventListener('click', (e) => {
-      e.preventDefault();
-      cancelMessageEdit();
-    });
-  }
-
-  // Dismiss context menu when clicking outside
-  document.addEventListener('click', (e) => {
-    const menu = document.getElementById('msg-context-menu');
-    if (menu && !menu.classList.contains('hidden')) {
-      if (!e.target.closest('.btn-msg-menu') && !e.target.closest('#msg-context-menu')) {
-        menu.classList.add('hidden');
-      }
-    }
-  });
-
-  // Setup Message Context Menu events
-  setupContextMenuHandlers();
-});
 
 // TAB HANDLING
 function setupTabs() {
@@ -605,20 +652,101 @@ function switchTab(tabId) {
   }
 }
 
-// STORAGE & SETTINGS LOAD
-async function loadSettings() {
+// ==========================================
+// ROBUST CLOUD & LOCAL STORAGE HELPERS
+// ==========================================
+
+let isSelfSavingStorage = false;
+
+async function getSettingsFromStorage() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['chatwootSettings'], (result) => {
-      if (result.chatwootSettings) {
-        config = { ...config, ...result.chatwootSettings };
-        // Populate inputs
-        elements.settingsUrl.value = config.url || '';
-        elements.settingsToken.value = config.token || '';
-        elements.settingsCountry.value = config.defaultCountryCode || '+55';
-      }
-      resolve();
+    chrome.storage.sync.get(['chatwootSettings'], (syncRes) => {
+      const syncData = syncRes?.chatwootSettings;
+      chrome.storage.local.get(['chatwootSettings'], (localRes) => {
+        const localData = localRes?.chatwootSettings;
+        const merged = (syncData && syncData.url && syncData.token) 
+          ? syncData 
+          : ((localData && localData.url && localData.token) ? localData : (syncData || localData || null));
+        resolve(merged);
+      });
     });
   });
+}
+
+async function saveSettingsToStorage(newConfig) {
+  return new Promise((resolve) => {
+    isSelfSavingStorage = true;
+    chrome.storage.sync.set({ chatwootSettings: newConfig }, () => {
+      chrome.storage.local.set({ chatwootSettings: newConfig }, () => {
+        setTimeout(() => { isSelfSavingStorage = false; }, 400);
+        resolve();
+      });
+    });
+  });
+}
+
+async function getRemindersFromStorage() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['chatwootReminders'], (syncRes) => {
+      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : [];
+      chrome.storage.local.get(['chatwootReminders'], (localRes) => {
+        const localList = Array.isArray(localRes?.chatwootReminders) ? localRes.chatwootReminders : [];
+        const mergedList = syncList.length >= localList.length ? syncList : localList;
+        resolve(mergedList);
+      });
+    });
+  });
+}
+
+async function saveRemindersToStorage(list) {
+  return new Promise((resolve) => {
+    isSelfSavingStorage = true;
+    const sanitized = list.map(item => ({
+      id: String(item.id),
+      url: String(item.url || ''),
+      accountId: String(item.accountId || ''),
+      conversationId: String(item.conversationId || ''),
+      inboxId: String(item.inboxId || ''),
+      contactName: String(item.contactName || 'Cliente'),
+      title: String(item.title || ''),
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      notes: String(item.notes || '').substring(0, 1000),
+      alarmTime: item.alarmTime || null,
+      savedAt: item.savedAt || Date.now()
+    }));
+
+    chrome.storage.sync.set({ chatwootReminders: sanitized }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn('[Chatwoot Storage] Sync reminders save notice:', chrome.runtime.lastError.message);
+      }
+      chrome.storage.local.set({ chatwootReminders: sanitized }, () => {
+        setTimeout(() => { isSelfSavingStorage = false; }, 400);
+        resolve(sanitized);
+      });
+    });
+  });
+}
+
+// STORAGE & SETTINGS LOAD
+async function loadSettings() {
+  const savedSettings = await getSettingsFromStorage();
+  if (savedSettings && savedSettings.url && savedSettings.token) {
+    config = { ...config, ...savedSettings };
+    elements.settingsUrl.value = config.url || '';
+    elements.settingsToken.value = config.token || '';
+    elements.settingsCountry.value = config.defaultCountryCode || '+55';
+
+    // Populate dropdowns & restore saved account and inbox
+    try {
+      await populateAccountsAndInboxes();
+      if (config.defaultAccount) {
+        elements.settingsDefaultAccount.value = config.defaultAccount;
+        await loadInboxesDropdown(config.defaultAccount, 'settings-default-inbox', config.defaultInbox);
+      }
+    } catch (err) {
+      console.warn('Could not populate accounts/inboxes on loadSettings:', err);
+    }
+  }
 }
 
 function setupSettingsHandlers() {
@@ -644,22 +772,20 @@ function setupSettingsHandlers() {
     config.defaultAccount = elements.settingsDefaultAccount.value;
     config.defaultInbox = elements.settingsDefaultInbox.value;
 
-    // Save to storage
-    chrome.storage.sync.set({ chatwootSettings: config }, async () => {
-      showToast('Configurações salvas com sucesso!', 'success');
-      updateConnectionStatus();
-      
-      // Notify background service worker of settings change
-      chrome.runtime.sendMessage({ action: 'settingsChanged' }).catch(err => {
-        // Ignore if background script is not ready or has no listeners
-        console.warn('Could not notify background worker:', err);
-      });
-      
-      // Reload dropdown selections for direct chat
-      if (config.url && config.token) {
-        await populateAccountsAndInboxes();
-      }
+    // Save to cloud storage
+    await saveSettingsToStorage(config);
+    showToast('Configurações salvas e sincronizadas!', 'success');
+    updateConnectionStatus();
+    
+    // Notify background service worker of settings change
+    chrome.runtime.sendMessage({ action: 'settingsChanged' }).catch(err => {
+      console.warn('Could not notify background worker:', err);
     });
+    
+    // Reload dropdown selections for direct chat
+    if (config.url && config.token) {
+      await populateAccountsAndInboxes();
+    }
   });
 
   // Load accounts/inboxes when settings tab is active
@@ -672,6 +798,21 @@ function setupSettingsHandlers() {
     }
   });
 }
+
+// Global CSP-compliant avatar image error handler
+document.addEventListener('error', (e) => {
+  if (e.target && e.target.tagName === 'IMG' && e.target.getAttribute('data-initials')) {
+    const initials = e.target.getAttribute('data-initials');
+    const title = e.target.getAttribute('title') || e.target.getAttribute('alt') || '';
+    const wrapper = document.createElement('div');
+    if (e.target.classList.contains('chat-msg-sender-avatar')) {
+      wrapper.className = 'chat-msg-sender-avatar-initials';
+    }
+    if (title) wrapper.setAttribute('title', title);
+    wrapper.textContent = initials;
+    e.target.replaceWith(wrapper);
+  }
+}, true);
 
 // DYNAMIC DROPDOWNS POPULATION
 async function populateAccountsAndInboxes() {
@@ -700,19 +841,23 @@ async function populateAccountsAndInboxes() {
     
     elements.settingsDefaultAccount.innerHTML = accOptions;
     elements.newChatAccount.innerHTML = accOptions;
+    if (elements.bulkChatAccount) elements.bulkChatAccount.innerHTML = accOptions;
 
     // Pre-select saved default
     if (config.defaultAccount) {
       elements.settingsDefaultAccount.value = config.defaultAccount;
       elements.newChatAccount.value = config.defaultAccount;
+      if (elements.bulkChatAccount) elements.bulkChatAccount.value = config.defaultAccount;
       
       // Load inboxes for default account
       await loadInboxesDropdown(config.defaultAccount, 'settings-default-inbox', config.defaultInbox);
       await loadInboxesDropdown(config.defaultAccount, 'new-chat-inbox', config.defaultInbox);
+      await loadInboxesDropdown(config.defaultAccount, 'bulk-chat-inbox', config.defaultInbox);
     } else if (selectSingleAccount && selectedAccId) {
       // Auto-load inboxes if there's only one account
       await loadInboxesDropdown(selectedAccId, 'settings-default-inbox', config.defaultInbox);
       await loadInboxesDropdown(selectedAccId, 'new-chat-inbox', config.defaultInbox);
+      await loadInboxesDropdown(selectedAccId, 'bulk-chat-inbox', config.defaultInbox);
     }
 
     // Connect New Chat Account change listener
@@ -724,6 +869,17 @@ async function populateAccountsAndInboxes() {
         elements.newChatInbox.innerHTML = '<option value="">Selecione uma conta primeiro...</option>';
       }
     });
+
+    if (elements.bulkChatAccount) {
+      elements.bulkChatAccount.addEventListener('change', async (e) => {
+        const accId = e.target.value;
+        if (accId) {
+          await loadInboxesDropdown(accId, 'bulk-chat-inbox');
+        } else {
+          elements.bulkChatInbox.innerHTML = '<option value="">Selecione uma conta primeiro...</option>';
+        }
+      });
+    }
 
   } catch (err) {
     console.error('Error populating accounts:', err);
@@ -997,7 +1153,7 @@ function renderTags() {
 }
 
 // SAVE CURRENT CONVERSATION SUBMIT
-function handleSaveCurrentSubmit(e) {
+async function handleSaveCurrentSubmit(e) {
   e.preventDefault();
 
   const title = elements.saveTitle.value.trim();
@@ -1045,46 +1201,42 @@ function handleSaveCurrentSubmit(e) {
     savedAt: Date.now()
   };
 
-  chrome.storage.sync.get(['chatwootReminders'], (result) => {
-    const list = result.chatwootReminders || [];
-    // Remove if exists to update
-    const filteredList = list.filter(item => item.id !== reminder.id);
-    filteredList.unshift(reminder); // Add to the top of list
-    
-    chrome.storage.sync.set({ chatwootReminders: filteredList }, () => {
-      // Create alarm if time is set
-      if (alarmTime) {
-        chrome.alarms.create(reminder.id, { when: alarmTime });
-      }
+  const currentList = await getRemindersFromStorage();
+  const filteredList = currentList.filter(item => item.id !== reminder.id);
+  filteredList.unshift(reminder);
 
-      showToast('Lembrete salvo com sucesso!', 'success');
-      
-      // Reset form
-      elements.saveNotes.value = '';
-      elements.saveAlarmEnable.checked = false;
-      elements.saveAlarmDatetimeWrapper.classList.add('hidden');
-      elements.saveAlarmDatetime.value = '';
-      activeTags = [];
-      renderTags();
-      
-      // Collapse quick reminder section and refresh list
-      const quickReminderSection = document.getElementById('quick-reminder-section');
-      if (quickReminderSection) {
-        quickReminderSection.classList.add('hidden');
-      }
-      loadReminders();
-      if (isChatWindowMode) {
-        switchTab('chats');
-      }
-    });
-  });
+  await saveRemindersToStorage(filteredList);
+
+  // Create alarm if time is set
+  if (alarmTime) {
+    chrome.alarms.create(reminder.id, { when: alarmTime });
+  }
+
+  showToast('Lembrete salvo e sincronizado na nuvem!', 'success');
+  
+  // Reset form
+  elements.saveNotes.value = '';
+  elements.saveAlarmEnable.checked = false;
+  elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+  elements.saveAlarmDatetime.value = '';
+  activeTags = [];
+  renderTags();
+  
+  // Collapse quick reminder section and refresh list
+  const quickReminderSection = document.getElementById('quick-reminder-section');
+  if (quickReminderSection) {
+    quickReminderSection.classList.add('hidden');
+  }
+  loadReminders();
+  if (isChatWindowMode) {
+    switchTab('chats');
+  }
 }
 
 // LOAD & RENDER REMINDERS
-function loadReminders(searchQuery = '') {
-  chrome.storage.sync.get(['chatwootReminders'], (result) => {
-    const list = result.chatwootReminders || [];
-    elements.remindersList.innerHTML = '';
+async function loadReminders(searchQuery = '') {
+  const list = await getRemindersFromStorage();
+  elements.remindersList.innerHTML = '';
 
     const query = searchQuery.trim().toLowerCase();
     const filtered = list.filter(item => {
@@ -1180,88 +1332,90 @@ function loadReminders(searchQuery = '') {
       `;
 
       // Open conversation directly in a window when clicking title link
-      card.querySelector('.reminder-title-link').addEventListener('click', (e) => {
-        e.preventDefault();
-        openConversationInWindow(item.conversationId, item.contactName, item.accountId, item.inboxId || '');
-      });
+      const titleLink = card.querySelector('.reminder-title-link');
+      if (titleLink) {
+        titleLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          openConversationInWindow(item.conversationId, item.contactName, item.accountId, item.inboxId || '');
+        });
+      }
 
       // Open in Chatwoot tab
-      card.querySelector('.btn-open-chatwoot').addEventListener('click', (e) => {
-        e.preventDefault();
-        chrome.tabs.create({ url: item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}` });
-      });
+      const btnOpenChatwoot = card.querySelector('.btn-open-chatwoot');
+      if (btnOpenChatwoot) {
+        btnOpenChatwoot.addEventListener('click', (e) => {
+          e.preventDefault();
+          chrome.tabs.create({ url: item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}` });
+        });
+      }
 
       // Edit Reminder
-      card.querySelector('.btn-edit-reminder').addEventListener('click', (e) => {
-        e.preventDefault();
-        
-        // Pre-populate currentTabInfo with reminder details
-        currentTabInfo.isChatwootConv = true;
-        currentTabInfo.accountId = item.accountId;
-        currentTabInfo.conversationId = item.conversationId;
-        currentTabInfo.contactName = item.contactName;
-        currentTabInfo.inboxId = item.inboxId || '';
-        currentTabInfo.url = item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}`;
+      const btnEditReminder = card.querySelector('.btn-edit-reminder');
+      if (btnEditReminder) {
+        btnEditReminder.addEventListener('click', (e) => {
+          e.preventDefault();
+          
+          currentTabInfo.isChatwootConv = true;
+          currentTabInfo.accountId = item.accountId;
+          currentTabInfo.conversationId = item.conversationId;
+          currentTabInfo.contactName = item.contactName;
+          currentTabInfo.inboxId = item.inboxId || '';
+          currentTabInfo.url = item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}`;
 
-        // Populate form inputs
-        elements.saveTitle.value = item.title || '';
-        elements.saveNotes.value = item.notes || '';
-        
-        if (item.alarmTime) {
-          elements.saveAlarmEnable.checked = true;
-          elements.saveAlarmDatetimeWrapper.classList.remove('hidden');
-          elements.saveAlarmDatetime.value = formatTimestampToLocalDatetime(item.alarmTime);
-        } else {
-          elements.saveAlarmEnable.checked = false;
-          elements.saveAlarmDatetimeWrapper.classList.add('hidden');
-          elements.saveAlarmDatetime.value = '';
-        }
+          elements.saveTitle.value = item.title || '';
+          elements.saveNotes.value = item.notes || '';
+          
+          if (item.alarmTime) {
+            elements.saveAlarmEnable.checked = true;
+            elements.saveAlarmDatetimeWrapper.classList.remove('hidden');
+            elements.saveAlarmDatetime.value = formatTimestampToLocalDatetime(item.alarmTime);
+          } else {
+            elements.saveAlarmEnable.checked = false;
+            elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+            elements.saveAlarmDatetime.value = '';
+          }
 
-        activeTags = Array.isArray(item.tags) ? [...item.tags] : [];
-        renderTags();
+          activeTags = Array.isArray(item.tags) ? [...item.tags] : [];
+          renderTags();
 
-        // Show form & hide warning
-        elements.notChatwootWarning.classList.add('hidden');
-        elements.saveCurrentForm.classList.remove('hidden');
+          elements.notChatwootWarning.classList.add('hidden');
+          elements.saveCurrentForm.classList.remove('hidden');
 
-        // Scroll to the top of reminders tab where the form is located
-        const tabPane = elements.remindersList.closest('.tab-pane');
-        if (tabPane) tabPane.scrollTop = 0;
+          const tabPane = elements.remindersList.closest('.tab-pane');
+          if (tabPane) tabPane.scrollTop = 0;
 
-        // Open quick reminder form section if closed
-        const quickReminderSection = document.getElementById('quick-reminder-section');
-        if (quickReminderSection) {
-          quickReminderSection.classList.remove('hidden');
-        }
+          const quickReminderSection = document.getElementById('quick-reminder-section');
+          if (quickReminderSection) {
+            quickReminderSection.classList.remove('hidden');
+          }
 
-        // Focus title input
-        elements.saveTitle.focus();
-      });
+          elements.saveTitle.focus();
+        });
+      }
 
       // Delete behavior
-      card.querySelector('.btn-delete').addEventListener('click', () => {
-        deleteReminder(item.id);
-      });
+      const btnDelete = card.querySelector('.btn-delete');
+      if (btnDelete) {
+        btnDelete.addEventListener('click', () => {
+          deleteReminder(item.id);
+        });
+      }
 
       elements.remindersList.appendChild(card);
     });
     resolveInboxNames();
-  });
 }
 
 
-function deleteReminder(id) {
+async function deleteReminder(id) {
   // Cancel chrome alarm
   chrome.alarms.clear(id);
 
-  chrome.storage.sync.get(['chatwootReminders'], (result) => {
-    const list = result.chatwootReminders || [];
-    const filteredList = list.filter(item => item.id !== id);
-    chrome.storage.sync.set({ chatwootReminders: filteredList }, () => {
-      showToast('Lembrete excluído.', 'success');
-      loadReminders(elements.searchInput.value);
-    });
-  });
+  const list = await getRemindersFromStorage();
+  const filteredList = list.filter(item => item.id !== id);
+  await saveRemindersToStorage(filteredList);
+  showToast('Lembrete excluído.', 'success');
+  loadReminders(elements.searchInput?.value || '');
 }
 
 // INICIAR CONVERSA POR TELEFONE
@@ -1413,6 +1567,477 @@ async function handleNewChatSubmit(e) {
   }
 }
 
+// ==========================================
+// BULK MESSAGING FUNCTIONS (CSV & ANTI-BAN)
+// ==========================================
+
+function getDynamicGreeting() {
+  const hour = new Date().getHours();
+  if (hour >= 0 && hour < 12) return 'Bom dia';
+  if (hour >= 12 && hour < 18) return 'Boa tarde';
+  return 'Boa noite';
+}
+
+function setupBulkMessaging() {
+  // Sub-tabs switching
+  const subtabBtns = document.querySelectorAll('.sub-tab-btn');
+  subtabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      subtabBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const targetSubtab = btn.getAttribute('data-subtab');
+      if (targetSubtab === 'individual') {
+        if (elements.subpaneIndividual) elements.subpaneIndividual.classList.remove('hidden');
+        if (elements.subpaneBulk) elements.subpaneBulk.classList.add('hidden');
+      } else {
+        if (elements.subpaneIndividual) elements.subpaneIndividual.classList.add('hidden');
+        if (elements.subpaneBulk) elements.subpaneBulk.classList.remove('hidden');
+      }
+    });
+  });
+
+  // Dropzone click & drag drop
+  if (elements.csvDropZone && elements.csvFileInput) {
+    elements.csvDropZone.addEventListener('click', () => {
+      elements.csvFileInput.click();
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      elements.csvDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        elements.csvDropZone.classList.add('dragover');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      elements.csvDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        elements.csvDropZone.classList.remove('dragover');
+      });
+    });
+
+    elements.csvDropZone.addEventListener('drop', (e) => {
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        processCSVFile(files[0]);
+      }
+    });
+
+    elements.csvFileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        processCSVFile(e.target.files[0]);
+      }
+    });
+  }
+
+  // Remove CSV
+  if (elements.btnRemoveCsv) {
+    elements.btnRemoveCsv.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resetCSVState();
+    });
+  }
+
+  // Template Variable Chips
+  document.querySelectorAll('.chip-var').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const varTag = chip.getAttribute('data-var');
+      const input = elements.bulkMessageTemplate;
+      if (!input) return;
+      const start = input.selectionStart || input.value.length;
+      const end = input.selectionEnd || input.value.length;
+      input.value = input.value.substring(0, start) + varTag + input.value.substring(end);
+      input.focus();
+      input.selectionStart = input.selectionEnd = start + varTag.length;
+      renderBulkPreview();
+    });
+  });
+
+  // Live Preview on template input
+  if (elements.bulkMessageTemplate) {
+    elements.bulkMessageTemplate.addEventListener('input', renderBulkPreview);
+  }
+
+  // Action Buttons
+  if (elements.btnStartBulk) {
+    elements.btnStartBulk.addEventListener('click', handleStartBulkSubmit);
+  }
+  if (elements.btnPauseBulk) {
+    elements.btnPauseBulk.addEventListener('click', togglePauseBulk);
+  }
+  if (elements.btnCancelBulk) {
+    elements.btnCancelBulk.addEventListener('click', cancelBulkExecution);
+  }
+}
+
+function resetCSVState() {
+  bulkContactsList = [];
+  if (elements.csvFileInput) elements.csvFileInput.value = '';
+  if (elements.csvLoadedBadge) elements.csvLoadedBadge.classList.add('hidden');
+  if (elements.csvPreviewContainer) elements.csvPreviewContainer.classList.add('hidden');
+  if (elements.csvDropZone) elements.csvDropZone.classList.remove('hidden');
+  if (elements.csvContactsTbody) elements.csvContactsTbody.innerHTML = '';
+  if (elements.csvContactsCount) elements.csvContactsCount.textContent = '0';
+  renderBulkPreview();
+}
+
+function processCSVFile(file) {
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    showToast('Por favor, selecione um arquivo válido no formato .CSV', 'error');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target.result;
+    parseCSVContent(text, file.name);
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+function parseCSVContent(text, filename) {
+  const lines = text.split(/\r\n|\n|\r/).map(line => line.trim()).filter(line => line.length > 0);
+  if (lines.length === 0) {
+    showToast('O arquivo CSV está vazio.', 'error');
+    return;
+  }
+
+  // Detect delimiter
+  const firstLine = lines[0];
+  const delimiter = firstLine.includes(';') ? ';' : ',';
+
+  const splitRow = (rowStr) => {
+    const pattern = new RegExp(`(?:^|${delimiter})(?:"([^"]*)"|([^"${delimiter}]*))`, 'g');
+    const entries = [];
+    let match;
+    while ((match = pattern.exec(rowStr)) !== null) {
+      entries.push((match[1] !== undefined ? match[1] : match[2]).trim());
+    }
+    return entries;
+  };
+
+  const headers = splitRow(lines[0]).map(h => h.toLowerCase());
+  
+  let nameIdx = headers.findIndex(h => h.includes('nome') || h.includes('name') || h.includes('contato'));
+  let phoneIdx = headers.findIndex(h => h.includes('telef') || h.includes('phone') || h.includes('cel') || h.includes('whats') || h.includes('num') || h.includes('tel'));
+
+  if (nameIdx === -1) nameIdx = 0;
+  if (phoneIdx === -1) phoneIdx = headers.length > 1 ? 1 : 0;
+
+  const contacts = [];
+  const startRow = (nameIdx >= 0 || phoneIdx >= 0) ? 1 : 0;
+
+  for (let i = startRow; i < lines.length; i++) {
+    const row = splitRow(lines[i]);
+    if (row.length === 0) continue;
+
+    const rawName = row[nameIdx] || `Contato ${i}`;
+    const rawPhone = row[phoneIdx] || '';
+
+    let cleanPhone = rawPhone.replace(/[^\d+]/g, '');
+    if (!cleanPhone) continue;
+
+    if (!cleanPhone.startsWith('+')) {
+      const country = config.defaultCountryCode ? config.defaultCountryCode.replace(/[^\d+]/g, '') : '55';
+      const cleanCountry = country.startsWith('+') ? country : `+${country}`;
+      cleanPhone = `${cleanCountry}${cleanPhone}`;
+    }
+
+    contacts.push({
+      index: contacts.length + 1,
+      name: rawName,
+      phone: cleanPhone,
+      status: 'pending'
+    });
+  }
+
+  if (contacts.length === 0) {
+    showToast('Nenhum número de telefone válido encontrado no CSV.', 'error');
+    return;
+  }
+
+  bulkContactsList = contacts;
+  if (elements.csvFilenameText) elements.csvFilenameText.textContent = `${filename} (${contacts.length} contatos)`;
+  if (elements.csvDropZone) elements.csvDropZone.classList.add('hidden');
+  if (elements.csvLoadedBadge) elements.csvLoadedBadge.classList.remove('hidden');
+  if (elements.csvPreviewContainer) elements.csvPreviewContainer.classList.remove('hidden');
+  if (elements.csvContactsCount) elements.csvContactsCount.textContent = contacts.length;
+
+  renderCSVPreviewTable();
+  renderBulkPreview();
+  showToast(`${contacts.length} contatos carregados com sucesso!`, 'success');
+}
+
+function renderCSVPreviewTable() {
+  if (!elements.csvContactsTbody) return;
+  let html = '';
+  bulkContactsList.forEach((c) => {
+    let statusBadge = '<span style="color: var(--text-secondary);">Pendente</span>';
+    if (c.status === 'sent') {
+      statusBadge = '<span style="color: var(--success); font-weight: 600;">Enviado ✔️</span>';
+    } else if (c.status === 'error') {
+      statusBadge = '<span style="color: var(--danger); font-weight: 600;">Erro ❌</span>';
+    } else if (c.status === 'processing') {
+      statusBadge = '<span style="color: var(--primary-color); font-weight: 600;">Enviando...</span>';
+    }
+
+    html += `
+      <tr id="csv-row-${c.index}">
+        <td>${c.index}</td>
+        <td><strong>${c.name}</strong></td>
+        <td><code>${c.phone}</code></td>
+        <td>${statusBadge}</td>
+      </tr>
+    `;
+  });
+  elements.csvContactsTbody.innerHTML = html;
+}
+
+function renderBulkPreview() {
+  if (!elements.bulkMessagePreviewText) return;
+
+  const firstContact = bulkContactsList.length > 0 ? bulkContactsList[0] : { name: 'João Silva', phone: '+5511999999999' };
+  let template = elements.bulkMessageTemplate?.value || '';
+
+  if (!template) {
+    elements.bulkMessagePreviewText.innerHTML = '<em>Digite uma mensagem acima para visualizar...</em>';
+    return;
+  }
+
+  const greeting = getDynamicGreeting();
+  let preview = template;
+
+  if (!preview.includes('{saudacao}')) {
+    preview = `${greeting}, {nome}!\n` + preview;
+  }
+
+  preview = preview.split('{saudacao}').join(greeting);
+  preview = preview.split('{nome}').join(firstContact.name);
+  preview = preview.split('{telefone}').join(firstContact.phone);
+
+  elements.bulkMessagePreviewText.textContent = preview;
+}
+
+async function handleStartBulkSubmit() {
+  if (isBulkRunning) return;
+
+  const accountId = elements.bulkChatAccount.value;
+  const inboxId = elements.bulkChatInbox.value;
+  const template = elements.bulkMessageTemplate.value.trim();
+
+  if (!accountId || !inboxId) {
+    showToast('Selecione a Conta e a Caixa de Entrada.', 'error');
+    return;
+  }
+
+  if (bulkContactsList.length === 0) {
+    showToast('Carregue um arquivo CSV com os contatos.', 'error');
+    return;
+  }
+
+  if (!template) {
+    showToast('Digite a mensagem a ser enviada.', 'error');
+    return;
+  }
+
+  const minDelaySec = parseInt(elements.bulkDelayMin.value, 10) || 15;
+  const maxDelaySec = parseInt(elements.bulkDelayMax.value, 10) || 30;
+  const batchPauseSec = parseInt(elements.bulkBatchPause.value, 10) || 60;
+
+  isBulkRunning = true;
+  isBulkPaused = false;
+  isBulkCancelled = false;
+
+  elements.btnStartBulk.classList.add('hidden');
+  elements.btnPauseBulk.classList.remove('hidden');
+  elements.btnCancelBulk.classList.remove('hidden');
+  elements.bulkExecutionArea.classList.remove('hidden');
+  elements.btnPauseBulk.textContent = '⏸️ Pausar';
+  if (elements.bulkLogBox) elements.bulkLogBox.innerHTML = '';
+
+  addBulkLog('🚀 Iniciando fila de envio em massa...', 'info');
+
+  let sentCount = 0;
+  let errorCount = 0;
+  const total = bulkContactsList.length;
+
+  for (let i = 0; i < total; i++) {
+    if (isBulkCancelled) {
+      addBulkLog('🛑 Envio em massa cancelado pelo usuário.', 'error');
+      break;
+    }
+
+    while (isBulkPaused) {
+      if (elements.bulkTimerLabel) elements.bulkTimerLabel.textContent = 'Pausado ⏸️';
+      await new Promise(r => setTimeout(r, 500));
+      if (isBulkCancelled) break;
+    }
+
+    if (isBulkCancelled) break;
+
+    const contact = bulkContactsList[i];
+    contact.status = 'processing';
+    renderCSVPreviewTable();
+
+    const rowEl = document.getElementById(`csv-row-${contact.index}`);
+    if (rowEl) rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    const greeting = getDynamicGreeting();
+    let msgText = template;
+    if (!msgText.includes('{saudacao}')) {
+      msgText = `${greeting}, {nome}!\n` + msgText;
+    }
+    msgText = msgText.split('{saudacao}').join(greeting);
+    msgText = msgText.split('{nome}').join(contact.name);
+    msgText = msgText.split('{telefone}').join(contact.phone);
+
+    addBulkLog(`[${i + 1}/${total}] Enviando para ${contact.name} (${contact.phone})...`, 'info');
+
+    try {
+      // 1. Search or create contact
+      const searchRes = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/search?q=${encodeURIComponent(contact.phone)}`);
+      let cId = null;
+
+      if (searchRes && searchRes.payload && searchRes.payload.length > 0) {
+        cId = searchRes.payload[0].id;
+      } else {
+        const createRes = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts`, {
+          method: 'POST',
+          body: JSON.stringify({ name: contact.name, phone_number: contact.phone })
+        });
+        cId = createRes?.payload?.contact?.id;
+      }
+
+      if (!cId) throw new Error('Não foi possível obter ID do contato.');
+
+      // 2. Link to inbox
+      try {
+        await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/${cId}/contact_inboxes`, {
+          method: 'POST',
+          body: JSON.stringify({ inbox_id: parseInt(inboxId), source_id: contact.phone })
+        });
+      } catch (err) {
+        // Inbox link exists
+      }
+
+      // 3. Find or create conversation
+      let convId = null;
+      try {
+        const convsRes = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/${cId}/conversations`);
+        const convs = Array.isArray(convsRes) ? convsRes : (convsRes?.payload || null);
+        if (Array.isArray(convs)) {
+          const active = convs.find(c => String(c.inbox_id) === String(inboxId) && c.status !== 'resolved');
+          if (active) convId = active.id;
+        }
+      } catch (e) {}
+
+      if (!convId) {
+        const newConvRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations`, {
+          method: 'POST',
+          body: JSON.stringify({ contact_id: parseInt(cId), inbox_id: parseInt(inboxId), status: 'open' })
+        });
+        convId = newConvRes?.id;
+      }
+
+      if (!convId) throw new Error('Não foi possível abrir a conversa.');
+
+      // 4. Send Message
+      await chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${convId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ content: msgText, message_type: 'outgoing', private: false })
+      });
+
+      contact.status = 'sent';
+      sentCount++;
+      addBulkLog(`✔️ Enviado com sucesso para ${contact.name}!`, 'success');
+
+    } catch (err) {
+      console.error('Bulk send error for contact:', contact, err);
+      contact.status = 'error';
+      errorCount++;
+      addBulkLog(`❌ Erro no envio para ${contact.name}: ${err.message}`, 'error');
+    }
+
+    renderCSVPreviewTable();
+    const progressPct = Math.round(((i + 1) / total) * 100);
+    if (elements.bulkProgressFill) elements.bulkProgressFill.style.width = `${progressPct}%`;
+    if (elements.bulkProgressLabel) {
+      elements.bulkProgressLabel.textContent = `Enviando: ${i + 1} / ${total} (${sentCount} sucessos, ${errorCount} erros)`;
+    }
+
+    if (i === total - 1) break;
+
+    // Pauses & delays
+    if ((i + 1) % 10 === 0 && batchPauseSec > 0) {
+      addBulkLog(`🛡️ Pausa de segurança Meta/WhatsApp: aguardando ${batchPauseSec}s...`, 'info');
+      await runCountdownTimer(batchPauseSec, 'Pausa de segurança Meta');
+    } else {
+      const randomDelay = Math.floor(Math.random() * (maxDelaySec - minDelaySec + 1)) + minDelaySec;
+      addBulkLog(`⏳ Aguardando ${randomDelay}s (Delay anti-bloqueio)...`, 'info');
+      await runCountdownTimer(randomDelay, 'Próximo envio');
+    }
+  }
+
+  isBulkRunning = false;
+  elements.btnStartBulk.classList.remove('hidden');
+  elements.btnPauseBulk.classList.add('hidden');
+  elements.btnCancelBulk.classList.add('hidden');
+  if (elements.bulkTimerLabel) {
+    elements.bulkTimerLabel.textContent = isBulkCancelled ? 'Cancelado' : 'Concluído! 🎉';
+  }
+
+  if (!isBulkCancelled) {
+    showToast(`Envio em massa concluído! ${sentCount} mensagens enviadas.`, 'success');
+  }
+}
+
+async function runCountdownTimer(seconds, label) {
+  for (let s = seconds; s > 0; s--) {
+    if (isBulkCancelled) return;
+    while (isBulkPaused) {
+      if (elements.bulkTimerLabel) elements.bulkTimerLabel.textContent = 'Pausado ⏸️';
+      await new Promise(r => setTimeout(r, 500));
+      if (isBulkCancelled) return;
+    }
+    if (elements.bulkTimerLabel) elements.bulkTimerLabel.textContent = `${label}: ${s}s`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+function togglePauseBulk() {
+  isBulkPaused = !isBulkPaused;
+  if (isBulkPaused) {
+    if (elements.btnPauseBulk) elements.btnPauseBulk.textContent = '▶️ Retomar';
+    addBulkLog('⏸️ Disparos em massa pausados pelo usuário.', 'info');
+  } else {
+    if (elements.btnPauseBulk) elements.btnPauseBulk.textContent = '⏸️ Pausar';
+    addBulkLog('▶️ Disparos em massa retomados.', 'info');
+  }
+}
+
+function cancelBulkExecution() {
+  if (confirm('Tem certeza que deseja cancelar os envios restantes em massa?')) {
+    isBulkCancelled = true;
+    isBulkPaused = false;
+    elements.btnStartBulk.classList.remove('hidden');
+    elements.btnPauseBulk.classList.add('hidden');
+    elements.btnCancelBulk.classList.add('hidden');
+    if (elements.bulkTimerLabel) elements.bulkTimerLabel.textContent = 'Cancelado 🛑';
+  }
+}
+
+function addBulkLog(msg, type = 'info') {
+  if (!elements.bulkLogBox) return;
+  const timeStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const item = document.createElement('div');
+  item.className = `bulk-log-item ${type}`;
+  item.textContent = `[${timeStr}] ${msg}`;
+  elements.bulkLogBox.appendChild(item);
+  elements.bulkLogBox.scrollTop = elements.bulkLogBox.scrollHeight;
+}
+
 // TOAST UTILITIES
 let toastTimeout;
 function showToast(message, type = 'success') {
@@ -1554,29 +2179,38 @@ function loadNotifications() {
           </div>
         `;
 
-        // Connect button actions
-        card.querySelector('.btn-action-icon.open').addEventListener('click', (e) => {
-          const btn = e.currentTarget;
-          openNotificationConversation(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
-        });
+        // Connect button actions safely
+        const btnOpen = card.querySelector('.btn-action-icon.open');
+        if (btnOpen) {
+          btnOpen.addEventListener('click', (e) => {
+            const btn = e.currentTarget;
+            openNotificationConversation(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
+          });
+        }
 
-        card.querySelector('.btn-action-icon.delete').addEventListener('click', (e) => {
-          const btn = e.currentTarget;
-          deleteConversationNotifications(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
-        });
+        const btnDel = card.querySelector('.btn-action-icon.delete');
+        if (btnDel) {
+          btnDel.addEventListener('click', (e) => {
+            const btn = e.currentTarget;
+            deleteConversationNotifications(btn.getAttribute('data-acc'), btn.getAttribute('data-conv'));
+          });
+        }
 
-        card.querySelector('.reply-form').addEventListener('submit', (e) => {
-          e.preventDefault();
-          const form = e.currentTarget;
-          const input = form.querySelector('.reply-input');
-          const btn = form.querySelector('.btn-reply-send');
-          sendQuickReply(
-            form.getAttribute('data-acc'),
-            form.getAttribute('data-conv'),
-            input,
-            btn
-          );
-        });
+        const replyForm = card.querySelector('.reply-form');
+        if (replyForm) {
+          replyForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const form = e.currentTarget;
+            const input = form.querySelector('.reply-input');
+            const btn = form.querySelector('.btn-reply-send');
+            sendQuickReply(
+              form.getAttribute('data-acc'),
+              form.getAttribute('data-conv'),
+              input,
+              btn
+            );
+          });
+        }
 
         elements.notificationsList.appendChild(card);
       });
@@ -2026,20 +2660,15 @@ async function loadConversations() {
       return timeB - timeA;
     });
 
-    // Calculate unread totals for Novas (New) and Em Atendimento (In Progress)
-    let newUnreadCount = 0;
+    // Calculate unread total for Em Atendimento (In Progress / Open)
     let progressUnreadCount = 0;
     openConversationsCache.forEach(item => {
-      if (item && item.unread_count > 0) {
-        if (!item.first_reply_created_at) {
-          newUnreadCount += item.unread_count;
-        } else {
-          progressUnreadCount += item.unread_count;
-        }
+      if (item && item.unread_count > 0 && item.status !== 'resolved') {
+        progressUnreadCount += item.unread_count;
       }
     });
 
-    updateFilterBadges(newUnreadCount, progressUnreadCount);
+    updateFilterBadges(progressUnreadCount);
 
     filterAndRenderConversations();
   } catch (err) {
@@ -2073,15 +2702,6 @@ function filterAndRenderConversations() {
     const filtered = sourceConversations.filter(item => {
       if (!item) return false;
       
-      // Stage-based filters (New vs In Progress)
-      // New: first_reply_created_at is null/empty (never replied to)
-      // In Progress: first_reply_created_at is set (already replied)
-      if (activeChatFilter === 'new') {
-        if (item.first_reply_created_at) return false;
-      } else if (activeChatFilter === 'progress') {
-        if (!item.first_reply_created_at) return false;
-      }
-      
       if (!query) return true;
       const contactName = (item.meta?.sender?.name || '').toLowerCase();
       const lastMsgContent = (Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1]?.content || '' : '').toLowerCase();
@@ -2105,11 +2725,11 @@ function getAvatarContent(contactName, avatarUrl) {
   if (avatarUrl) {
     let fullUrl = avatarUrl;
     if (!fullUrl.startsWith('http')) {
-      const baseUrl = config.url.endsWith('/') ? config.url.slice(0, -1) : config.url;
+      const baseUrl = (config.url || '').endsWith('/') ? config.url.slice(0, -1) : (config.url || '');
       const relativeUrl = avatarUrl.startsWith('/') ? avatarUrl : '/' + avatarUrl;
       fullUrl = baseUrl + relativeUrl;
     }
-    return `<img src="${fullUrl}" alt="${contactName}" onerror="this.outerHTML='${initials}';" />`;
+    return `<img src="${fullUrl}" alt="${contactName}" data-initials="${initials}" />`;
   }
   return initials;
 }
@@ -2131,6 +2751,15 @@ function renderConversationsList(conversations, accountId) {
 
     conversations.forEach(item => {
       if (!item) return;
+
+      // Check if conversation is currently open in an active window
+      const activeTimestamp = activeOpenConversationsCache[item.id];
+      const isOpenWindow = activeTimestamp && (Date.now() - activeTimestamp < 30000);
+
+      if (isOpenWindow) {
+        item.unread_count = 0; // Force 0 unread when open in window
+      }
+
       const contactName = item.meta?.sender?.name || 'Cliente';
       const avatarUrl = item.meta?.sender?.avatar_url;
       const avatarContent = getAvatarContent(contactName, avatarUrl);
@@ -2144,13 +2773,23 @@ function renderConversationsList(conversations, accountId) {
       const timestamp = item.last_activity_at || item.timestamp;
       const timeStr = timestamp ? formatRelativeTime(timestamp * 1000) : '';
 
-      const isUnread = item.unread_count > 0;
-      const itemClass = isUnread ? 'chat-item unread' : 'chat-item';
+      const isUnread = !isOpenWindow && item.unread_count > 0;
+
+      let itemClass = 'chat-item';
+      if (isOpenWindow) {
+        itemClass += ' window-active';
+      } else if (isUnread) {
+        itemClass += ' unread';
+      }
 
       const card = document.createElement('div');
       card.className = itemClass;
       card.setAttribute('data-id', item.id);
       
+      const badgeHtml = isOpenWindow 
+        ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
+        : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
+
       card.innerHTML = `
         <div class="chat-item-avatar">${avatarContent}</div>
         <div class="chat-item-content">
@@ -2162,7 +2801,7 @@ function renderConversationsList(conversations, accountId) {
             <span class="chat-item-msg">${lastMsgText}</span>
             <div class="chat-item-meta">
               <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
-              ${isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : ''}
+              ${badgeHtml}
             </div>
           </div>
         </div>
@@ -2205,32 +2844,17 @@ function updateUnreadBadgeLocal() {
   chrome.action.setBadgeBackgroundColor({ color: '#FF3B30' });
 
   // Update filter chip badges using the open conversations cache
-  let newUnread = 0;
   let progressUnread = 0;
   source.forEach(item => {
     if (item && item.unread_count > 0 && item.status !== 'resolved') {
-      if (!item.first_reply_created_at) {
-        newUnread += item.unread_count;
-      } else {
-        progressUnread += item.unread_count;
-      }
+      progressUnread += item.unread_count;
     }
   });
-  updateFilterBadges(newUnread, progressUnread);
+  updateFilterBadges(progressUnread);
 }
 
-function updateFilterBadges(newCount, progressCount) {
-  const badgeNew = document.getElementById('badge-filter-new');
+function updateFilterBadges(progressCount) {
   const badgeProgress = document.getElementById('badge-filter-progress');
-
-  if (badgeNew) {
-    if (newCount > 0) {
-      badgeNew.textContent = newCount;
-      badgeNew.classList.remove('hidden');
-    } else {
-      badgeNew.classList.add('hidden');
-    }
-  }
 
   if (badgeProgress) {
     if (progressCount > 0) {
@@ -2241,10 +2865,54 @@ function updateFilterBadges(newCount, progressCount) {
     }
   }
 }
+// ==========================================
+// ACTIVE OPEN CONVERSATION TRACKER
+// ==========================================
 
+let activeOpenConversationsCache = {};
+let activeConversationHeartbeat = null;
 
+function startActiveConversationHeartbeat(convId) {
+  if (!convId) return;
+  stopActiveConversationHeartbeat();
+
+  const updateStorage = () => {
+    chrome.storage.local.get(['activeOpenConversations'], (res) => {
+      const activeMap = res.activeOpenConversations || {};
+      activeMap[convId] = Date.now();
+      
+      const now = Date.now();
+      for (const id in activeMap) {
+        if (now - activeMap[id] > 30000) {
+          delete activeMap[id];
+        }
+      }
+      chrome.storage.local.set({ activeOpenConversations: activeMap });
+    });
+  };
+
+  updateStorage();
+  activeConversationHeartbeat = setInterval(updateStorage, 4000);
+}
+
+function stopActiveConversationHeartbeat(convId) {
+  if (activeConversationHeartbeat) {
+    clearInterval(activeConversationHeartbeat);
+    activeConversationHeartbeat = null;
+  }
+  const idToRemove = convId || (currentActiveChat ? currentActiveChat.id : null);
+  if (idToRemove) {
+    chrome.storage.local.get(['activeOpenConversations'], (res) => {
+      const activeMap = res.activeOpenConversations || {};
+      delete activeMap[idToRemove];
+      chrome.storage.local.set({ activeOpenConversations: activeMap });
+    });
+  }
+}
 
 function openConversationChat(conversationId, contactName, accountId, inboxId) {
+  startActiveConversationHeartbeat(conversationId);
+  switchTab('chats');
   // Collapse formatting toolbar and emoji picker by default
   const chatFormatToolbar = document.getElementById('chat-format-toolbar');
   if (chatFormatToolbar) chatFormatToolbar.classList.add('hidden');
@@ -2362,6 +3030,7 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
 }
 
 function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
+  startActiveConversationHeartbeat(conversationId);
   const targetUrl = chrome.runtime.getURL(`popup.html?convId=${conversationId}`);
   
   // Clean unread status in BOTH caches instantly for a premium responsive feel
@@ -2398,8 +3067,8 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
   });
 
   chrome.tabs.query({}, (tabs) => {
-    // Check if a window for this conversation is already open
-    const existingTab = tabs.find(tab => tab.url && tab.url.startsWith(targetUrl));
+    // Check if a window for this conversation is already open using robust URL detection
+    const existingTab = tabs.find(tab => tab.url && tab.url.includes(`convId=${conversationId}`));
     if (existingTab) {
       chrome.tabs.update(existingTab.id, { active: true });
       chrome.windows.update(existingTab.windowId, { focused: true });
@@ -2698,7 +3367,7 @@ function renderChatMessages(messages, silent, isPrepend = false) {
 
         const initials = senderName ? senderName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : '?';
         const avatarHtml = avatarUrl
-          ? `<img src="${avatarUrl}" class="chat-msg-sender-avatar" title="${senderName}" alt="${senderName}" onerror="this.outerHTML='<div class=&quot;chat-msg-sender-avatar-initials&quot; title=&quot;${senderName}&quot;>${initials}</div>';" />`
+          ? `<img src="${avatarUrl}" class="chat-msg-sender-avatar" title="${senderName}" alt="${senderName}" data-initials="${initials}" />`
           : `<div class="chat-msg-sender-avatar-initials" title="${senderName}">${initials}</div>`;
 
         if (isOutgoing) {
@@ -2784,9 +3453,11 @@ function renderChatMessages(messages, silent, isPrepend = false) {
 
 function closeChatView() {
   if (isChatWindowMode) {
+    stopActiveConversationHeartbeat(currentActiveChat?.id);
     window.close();
     return;
   }
+  stopActiveConversationHeartbeat(currentActiveChat?.id);
   lastRenderedRawHtml = '';
   if (chatPollInterval) {
     clearInterval(chatPollInterval);
@@ -3732,14 +4403,20 @@ function renderAttachmentsPreview() {
           <button type="button" class="btn-edit-attachment" title="Editar Imagem">✏️</button>
           <button type="button" class="btn-remove-attachment" title="Remover">&times;</button>
         `;
-        item.querySelector('.btn-remove-attachment').addEventListener('click', () => {
-          pendingAttachments.splice(index, 1);
-          renderAttachmentsPreview();
-        });
-        item.querySelector('.btn-edit-attachment').addEventListener('click', () => {
-          editingAttachmentIndex = index;
-          openImageEditor(file);
-        });
+        const btnRem = item.querySelector('.btn-remove-attachment');
+        if (btnRem) {
+          btnRem.addEventListener('click', () => {
+            pendingAttachments.splice(index, 1);
+            renderAttachmentsPreview();
+          });
+        }
+        const btnEd = item.querySelector('.btn-edit-attachment');
+        if (btnEd) {
+          btnEd.addEventListener('click', () => {
+            editingAttachmentIndex = index;
+            openImageEditor(file);
+          });
+        }
       };
       reader.readAsDataURL(file);
     } else {
@@ -3748,10 +4425,13 @@ function renderAttachmentsPreview() {
         <span class="attachment-name" title="${file.name}">${file.name}</span>
         <button type="button" class="btn-remove-attachment" title="Remover">&times;</button>
       `;
-      item.querySelector('.btn-remove-attachment').addEventListener('click', () => {
-        pendingAttachments.splice(index, 1);
-        renderAttachmentsPreview();
-      });
+      const btnRem = item.querySelector('.btn-remove-attachment');
+      if (btnRem) {
+        btnRem.addEventListener('click', () => {
+          pendingAttachments.splice(index, 1);
+          renderAttachmentsPreview();
+        });
+      }
     }
 
     list.appendChild(item);
@@ -4633,6 +5313,7 @@ function saveNavigationState(updates) {
 
 function restoreNavigationState() {
   if (isChatWindowMode) {
+    switchTab('chats');
     const urlParams = new URLSearchParams(window.location.search);
     const convId = parseInt(urlParams.get('convId'), 10);
     const contactName = urlParams.get('contactName') || 'Cliente';

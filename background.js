@@ -56,6 +56,35 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
+// STORAGE HELPERS FOR BACKGROUND
+async function getSettingsFromStorage() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['chatwootSettings'], (syncRes) => {
+      const syncData = syncRes?.chatwootSettings;
+      chrome.storage.local.get(['chatwootSettings'], (localRes) => {
+        const localData = localRes?.chatwootSettings;
+        const merged = (syncData && syncData.url && syncData.token) 
+          ? syncData 
+          : ((localData && localData.url && localData.token) ? localData : (syncData || localData || null));
+        resolve(merged);
+      });
+    });
+  });
+}
+
+async function getRemindersFromStorage() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['chatwootReminders'], (syncRes) => {
+      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : [];
+      chrome.storage.local.get(['chatwootReminders'], (localRes) => {
+        const localList = Array.isArray(localRes?.chatwootReminders) ? localRes.chatwootReminders : [];
+        const mergedList = syncList.length >= localList.length ? syncList : localList;
+        resolve(mergedList);
+      });
+    });
+  });
+}
+
 // CONNECTION MANAGEMENT
 async function initConnection(force = false) {
   if (isInitializing && !force) {
@@ -67,9 +96,8 @@ async function initConnection(force = false) {
   closeConnection();
 
   try {
-    // Retrieve configuration
-    const result = await chrome.storage.sync.get(['chatwootSettings']);
-    config = result.chatwootSettings;
+    // Retrieve configuration from cloud/local storage
+    config = await getSettingsFromStorage();
 
     if (!config || !config.url || !config.token) {
       console.log('[Chatwoot Helper] Configuration missing (URL/Token). Connection aborted.');
@@ -194,6 +222,20 @@ function subscribeChannels() {
   });
 }
 
+function isConversationActive(conversationId) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['activeOpenConversations'], (res) => {
+      const activeMap = res.activeOpenConversations || {};
+      const timestamp = activeMap[conversationId];
+      if (timestamp && (Date.now() - timestamp < 30000)) {
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    });
+  });
+}
+
 function handleWebSocketMessage(rawData) {
   try {
     const data = JSON.parse(rawData);
@@ -234,14 +276,34 @@ function handleWebSocketMessage(rawData) {
           accountId = accounts[0].id;
         }
 
-        updateUnreadBadgeFromAPI();
-        showNotification(msgData, accountId);
+        // Check if this conversation is currently OPEN and active in a window
+        isConversationActive(msgData.conversation_id).then(active => {
+          if (active) {
+            console.log(`[Chatwoot Helper] Suppressing notification for conv #${msgData.conversation_id} because it is currently OPEN.`);
+            
+            // Mark last seen in Chatwoot API so it stays read
+            chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${msgData.conversation_id}/update_last_seen`, {
+              method: 'POST'
+            }).catch(() => {});
 
-        // Broadcast to popup to reload lists instantly
-        chrome.runtime.sendMessage({
-          action: 'newMessageReceived',
-          conversationId: msgData.conversation_id
-        }).catch(() => {});
+            // Broadcast active message event to popup
+            chrome.runtime.sendMessage({
+              action: 'newMessageReceivedInActiveChat',
+              conversationId: msgData.conversation_id
+            }).catch(() => {});
+
+            return;
+          }
+
+          updateUnreadBadgeFromAPI();
+          showNotification(msgData, accountId);
+
+          // Broadcast to popup to reload lists
+          chrome.runtime.sendMessage({
+            action: 'newMessageReceived',
+            conversationId: msgData.conversation_id
+          }).catch(() => {});
+        });
       }
     }
   } catch (err) {
@@ -325,30 +387,28 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   }
 });
 
-function showReminderAlarmNotification(reminderId) {
-  // Fetch the reminder from synced storage
-  chrome.storage.sync.get(['chatwootReminders'], (result) => {
-    const list = result.chatwootReminders || [];
-    const reminder = list.find(item => item.id === reminderId);
-    
-    if (reminder) {
-      // Build notification
-      const notificationId = `alarm_conv_${reminder.accountId}_${reminder.conversationId}`;
-      const title = `Lembrete: Responder ${reminder.contactName}`;
-      const message = reminder.notes 
-        ? `${reminder.title}\nNotas: ${reminder.notes}` 
-        : `${reminder.title}`;
+async function showReminderAlarmNotification(reminderId) {
+  // Fetch the reminder from storage
+  const list = await getRemindersFromStorage();
+  const reminder = list.find(item => item.id === reminderId);
+  
+  if (reminder) {
+    // Build notification
+    const notificationId = `alarm_conv_${reminder.accountId}_${reminder.conversationId}`;
+    const title = `Lembrete: Responder ${reminder.contactName}`;
+    const message = reminder.notes 
+      ? `${reminder.title}\nNotas: ${reminder.notes}` 
+      : `${reminder.title}`;
 
-      chrome.notifications.create(notificationId, {
-        type: 'basic',
-        iconUrl: 'icons/icon-128.png',
-        title: title,
-        message: message,
-        priority: 2,
-        requireInteraction: true
-      });
-    }
-  });
+    chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: 'icons/icon-128.png',
+      title: title,
+      message: message,
+      priority: 2,
+      requireInteraction: true
+    });
+  }
 }
 
 // SYNC ALARMS & STORAGE WATCHERS
@@ -389,19 +449,24 @@ function syncAlarms(reminders) {
   });
 }
 
-function syncAlarmsFromStorage() {
-  chrome.storage.sync.get(['chatwootReminders'], (result) => {
-    const list = result.chatwootReminders || [];
-    syncAlarms(list);
-  });
+async function syncAlarmsFromStorage() {
+  const list = await getRemindersFromStorage();
+  syncAlarms(list);
 }
 
-// Watch sync storage changes to keep local alarms in sync
+// Watch sync/local storage changes to keep local alarms & WebSocket in sync
 chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'sync') {
-    if (changes.chatwootReminders) {
+  if (namespace === 'sync' || namespace === 'local') {
+    const keys = Object.keys(changes);
+    const isReminderChanged = keys.some(k => k === 'chatwootReminders' || k === 'chatwootReminderIndex' || k.startsWith('rem_'));
+    if (isReminderChanged) {
       console.log('[Chatwoot Helper] Synced reminders updated. Updating local alarms...');
-      syncAlarms(changes.chatwootReminders.newValue || []);
+      syncAlarmsFromStorage();
+    }
+    if (changes.chatwootSettings) {
+      console.log('[Chatwoot Helper] Synced settings updated. Reconnecting WebSocket...');
+      initConnection(true);
+      updateUnreadBadgeFromAPI();
     }
   }
 });
@@ -409,8 +474,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 // UNREAD BADGE FROM API LOGIC
 async function updateUnreadBadgeFromAPI() {
   try {
-    const result = await chrome.storage.sync.get(['chatwootSettings']);
-    const savedConfig = result.chatwootSettings;
+    const savedConfig = await getSettingsFromStorage();
     if (!savedConfig || !savedConfig.url || !savedConfig.token) return;
     
     let accountId = savedConfig.defaultAccount;

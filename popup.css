@@ -1109,6 +1109,17 @@ textarea {
   border-color: rgba(37, 99, 235, 0.25);
 }
 
+.chat-item.window-active {
+  background-color: rgba(6, 182, 212, 0.08) !important;
+  border-color: rgba(6, 182, 212, 0.35) !important;
+  border-left: 3.5px solid var(--accent-color) !important;
+}
+
+.chat-item.window-active:hover {
+  background-color: rgba(6, 182, 212, 0.15) !important;
+  border-color: var(--accent-color) !important;
+}
+
 .chat-item-avatar {
   width: 36px;
   height: 36px;
@@ -1215,6 +1226,19 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.chat-item-open-tag {
+  background-color: rgba(6, 182, 212, 0.18);
+  color: #06b6d4;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1.5px 6px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 /* Chat Detail View (WhatsApp Style) */
@@ -2795,6 +2819,257 @@ body.chat-window-mode #btn-reminder-back-to-chat {
 .chat-msg-bubble.outgoing.agent-color-3 {
   background: linear-gradient(135deg, #0f172a, #1e3a8a); /* Dark slate blue */
 }
+
+/* ==========================================
+   SUB-TABS & BULK MESSAGING STYLES (CSV)
+   ========================================== */
+
+.sub-tabs-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  background-color: var(--bg-tertiary);
+  padding: 4px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.sub-tab-btn {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sub-tab-btn:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.sub-tab-btn.active {
+  color: #ffffff;
+  background-color: var(--primary-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* CSV Drop Zone */
+.csv-drop-zone {
+  border: 2px dashed var(--border-color);
+  border-radius: var(--border-radius-sm);
+  padding: 16px 12px;
+  text-align: center;
+  background-color: var(--bg-tertiary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.csv-drop-zone:hover, .csv-drop-zone.dragover {
+  border-color: var(--primary-color);
+  background-color: rgba(30, 58, 138, 0.15);
+}
+
+.csv-drop-icon {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.csv-drop-title {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0 0 2px 0;
+}
+
+.csv-drop-subtitle {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* Loaded CSV Badge */
+.csv-loaded-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: rgba(30, 58, 138, 0.25);
+  border: 1px solid var(--primary-color);
+  border-radius: var(--border-radius-sm);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  margin-top: 4px;
+}
+
+.btn-remove-csv-icon {
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+/* CSV Preview Table */
+.csv-preview-container {
+  margin-top: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  background-color: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.csv-preview-header {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.csv-preview-scroll {
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.csv-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.5px;
+}
+
+.csv-preview-table th, .csv-preview-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.csv-preview-table th {
+  background-color: rgba(0, 0, 0, 0.15);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.csv-preview-table td {
+  color: var(--text-primary);
+}
+
+/* Variable Chips */
+.template-vars-chips {
+  display: flex;
+  gap: 4px;
+}
+
+.chip-var {
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--primary-color);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: var(--transition);
+  font-family: monospace;
+}
+
+.chip-var:hover {
+  background-color: var(--primary-color);
+  color: #ffffff;
+}
+
+/* Live Message Preview Card */
+.bulk-message-preview-card {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background-color: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  border-left: 3px solid var(--primary-color);
+  border-radius: var(--border-radius-sm);
+}
+
+.preview-card-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--primary-color);
+  margin-bottom: 4px;
+}
+
+.preview-card-body {
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Bulk Execution Progress Bar & Log */
+.bulk-execution-area {
+  padding: 10px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+}
+
+.bulk-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.bulk-timer-badge {
+  font-size: 10px;
+  background-color: rgba(59, 130, 246, 0.2);
+  color: var(--primary-color);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.bulk-progress-track {
+  height: 6px;
+  background-color: var(--bg-primary);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.bulk-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  transition: width 0.3s ease;
+}
+
+.bulk-log-box {
+  max-height: 90px;
+  overflow-y: auto;
+  font-size: 10px;
+  font-family: monospace;
+  background-color: var(--bg-primary);
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.bulk-log-item {
+  margin-bottom: 2px;
+}
+.bulk-log-item.success { color: var(--success); }
+.bulk-log-item.error { color: var(--danger); }
+.bulk-log-item.info { color: var(--text-primary); }
 
 
 
