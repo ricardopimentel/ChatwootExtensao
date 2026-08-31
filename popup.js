@@ -1355,7 +1355,18 @@ async function handleSaveCurrentSubmit(e) {
     chrome.alarms.create(reminder.id, { when: alarmTime });
   }
 
-  showToast('Lembrete salvo e sincronizado na nuvem!', 'success');
+  // Post private note to Chatwoot conversation for server-side persistence across PCs
+  if (currentTabInfo.accountId && currentTabInfo.conversationId) {
+    chatwootFetch(`/api/v1/accounts/${currentTabInfo.accountId}/conversations/${currentTabInfo.conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        content: `📌 [Lembrete Extensão] ${title}${notes ? '\nNotas: ' + notes : ''}`,
+        private: true
+      })
+    }).catch(err => console.warn('Could not post private note to Chatwoot:', err));
+  }
+
+  showToast('Lembrete salvo e sincronizado!', 'success');
   
   // Reset form
   elements.saveNotes.value = '';
