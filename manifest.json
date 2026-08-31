@@ -5,6 +5,7 @@
   "description": "Salva lembretes de conversas e inicia chats por telefone diretamente no Chatwoot.",
   "permissions": [
     "activeTab",
+    "tabs",
     "storage",
     "notifications",
     "alarms",

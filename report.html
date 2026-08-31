@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Relatório de Desempenho do Agente</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --border-color: #e2e8f0;
+      --bg-secondary: #f8fafc;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text-primary);
+      margin: 40px;
+      line-height: 1.6;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid var(--primary);
+      padding-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .header h1 {
+      font-size: 24px;
+      margin: 0;
+      color: var(--primary);
+    }
+    .header p {
+      margin: 4px 0 0 0;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    .meta-info {
+      text-align: right;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    .card-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: var(--primary);
+    }
+    .section-title {
+      font-size: 16px;
+      font-weight: bold;
+      margin-top: 30px;
+      margin-bottom: 15px;
+      border-left: 4px solid var(--primary);
+      padding-left: 10px;
+    }
+    .breakdown-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 40px;
+    }
+    .breakdown-table th, .breakdown-table td {
+      border: 1px solid var(--border-color);
+      padding: 10px 12px;
+      text-align: left;
+    }
+    .breakdown-table th {
+      background-color: var(--bg-secondary);
+      font-weight: 600;
+    }
+    .productivity-box {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 40px;
+    }
+    .no-print-bar {
+      background: #f1f5f9;
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-radius: 8px;
+      margin-bottom: 30px;
+    }
+    .btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .btn-secondary {
+      background: #64748b;
+    }
+    @media print {
+      .no-print-bar {
+        display: none;
+      }
+      body {
+        margin: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print-bar">
+    <span>Visualização do Relatório de Desempenho</span>
+    <div>
+      <button class="btn btn-secondary" onclick="window.close()" style="margin-right: 10px;">Fechar</button>
+      <button class="btn" onclick="window.print()">Imprimir / Salvar PDF</button>
+    </div>
+  </div>
+
+  <div class="header">
+    <div>
+      <h1 id="agent-name">Relatório do Agente</h1>
+      <p id="report-period">Período: ...</p>
+    </div>
+    <div class="meta-info">
+      <p>Gerado por Chatwoot Helper</p>
+      <p id="generation-date">Data: ...</p>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">Mensagens Enviadas</div>
+      <div class="card-value" id="val-messages">0</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Chats Respondidos</div>
+      <div class="card-value" id="val-replied">0</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Chats Resolvidos</div>
+      <div class="card-value" id="val-resolved">0</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Chats Abertos</div>
+      <div class="card-value" id="val-open">0</div>
+    </div>
+  </div>
+
+  <div class="section-title">Atendimentos por Caixa de Entrada</div>
+  <table class="breakdown-table">
+    <thead>
+      <tr>
+        <th>Caixa de Entrada</th>
+        <th>Atendimentos Realizados</th>
+      </tr>
+    </thead>
+    <tbody id="breakdown-body">
+      <!-- Dynamic rows -->
+    </tbody>
+  </table>
+
+  <div class="section-title">Análise de Produtividade</div>
+  <div class="productivity-box" id="productivity-text">
+    <!-- Dynamic text -->
+  </div>
+
+  <script src="report.js"></script>
+</body>
+</html>

@@ -12,7 +12,7 @@ let isInitializing = false;
 // Run immediately when service worker starts
 console.log('[Chatwoot Helper] Service worker starting...');
 initConnection();
-updateBadgeFromStorage();
+updateUnreadBadgeFromAPI();
 syncAlarmsFromStorage();
 
 // Set up Chrome Alarms to ensure persistent connection
@@ -35,6 +35,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       console.log('[Chatwoot Helper] WebSocket is offline. Reinitializing...');
       initConnection();
     }
+    updateUnreadBadgeFromAPI();
   } else if (alarm.name.startsWith('reminder_')) {
     showReminderAlarmNotification(alarm.name);
   }
@@ -45,6 +46,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'settingsChanged') {
     console.log('[Chatwoot Helper] Settings updated. Reconnecting WebSocket...');
     initConnection(true); // Force reconnect even if another initialization is in progress
+    updateUnreadBadgeFromAPI();
   }
 });
 
@@ -226,8 +228,14 @@ function handleWebSocketMessage(rawData) {
           accountId = accounts[0].id;
         }
 
-        // Save notification to local storage, which will then trigger showNotification
-        saveNotificationToStorage(msgData, accountId);
+        updateUnreadBadgeFromAPI();
+        showNotification(msgData, accountId);
+
+        // Broadcast to popup to reload lists instantly
+        chrome.runtime.sendMessage({
+          action: 'newMessageReceived',
+          conversationId: msgData.conversation_id
+        }).catch(() => {});
       }
     }
   } catch (err) {
@@ -301,101 +309,15 @@ function showNotification(msg, accountId) {
 
 // Listen for clicks on the notification cards
 chrome.notifications.onClicked.addListener((notificationId) => {
-  if (notificationId.startsWith('chatwoot_conv_')) {
+  if (notificationId.startsWith('chatwoot_conv_') || notificationId.startsWith('alarm_conv_')) {
     const parts = notificationId.split('_');
     const accountId = parts[2];
     const conversationId = parts[3];
 
-    // Clear notifications for this conversation
-    removeNotificationsForConversation(accountId, conversationId);
-
-    chrome.storage.sync.get(['chatwootSettings'], (result) => {
-      const savedConfig = result.chatwootSettings;
-      if (savedConfig && savedConfig.url) {
-        const targetUrl = `${savedConfig.url}/app/accounts/${accountId}/conversations/${conversationId}`;
-        
-        // Search if the conversation is already open in any tab
-        chrome.tabs.query({}, (tabs) => {
-          const existingTab = tabs.find(tab => tab.url && tab.url.startsWith(targetUrl));
-          
-          if (existingTab) {
-            // Activate the tab and focus its window
-            chrome.tabs.update(existingTab.id, { active: true });
-            chrome.windows.update(existingTab.windowId, { focused: true });
-          } else {
-            // Open a new tab
-            chrome.tabs.create({ url: targetUrl });
-          }
-          
-          // Clear the notification
-          chrome.notifications.clear(notificationId);
-        });
-      }
-    });
+    openConversationInWindow(conversationId, 'Cliente', accountId, '');
+    chrome.notifications.clear(notificationId);
   }
 });
-
-// NOTIFICATION STORAGE HELPERS
-function saveNotificationToStorage(msgData, accountId) {
-  const notificationId = `msg_${msgData.id}`;
-  const conversationId = msgData.conversation_id;
-  const senderName = msgData.sender ? msgData.sender.name : 'Cliente';
-  const content = msgData.content || 'Nova mensagem (mídia/anexo)';
-
-  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
-    const list = result.chatwootNotifications || [];
-    
-    const newNotification = {
-      id: notificationId,
-      conversationId: conversationId,
-      accountId: accountId,
-      inboxId: msgData.inbox_id,
-      senderName: senderName,
-      content: content,
-      timestamp: Date.now(),
-      read: false
-    };
-
-    // Filter out duplicates (if any)
-    let filteredList = list.filter(item => item.id !== notificationId);
-    filteredList.unshift(newNotification);
-
-    // Limit to 30 items for sync storage quota limits
-    if (filteredList.length > 30) {
-      filteredList = filteredList.slice(0, 30);
-    }
-
-    chrome.storage.sync.set({ chatwootNotifications: filteredList }, () => {
-      updateExtensionBadge(filteredList);
-      showNotification(msgData, accountId);
-    });
-  });
-}
-
-function updateBadgeFromStorage() {
-  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
-    const list = result.chatwootNotifications || [];
-    updateExtensionBadge(list);
-  });
-}
-
-function updateExtensionBadge(list) {
-  const unreadCount = list.filter(item => !item.read).length;
-  chrome.action.setBadgeText({ text: unreadCount > 0 ? String(unreadCount) : '' });
-  chrome.action.setBadgeBackgroundColor({ color: '#FF3B30' });
-}
-
-function removeNotificationsForConversation(accountId, conversationId) {
-  chrome.storage.sync.get(['chatwootNotifications'], (result) => {
-    const list = result.chatwootNotifications || [];
-    const filteredList = list.filter(item => 
-      !(item.accountId == accountId && item.conversationId == conversationId)
-    );
-    chrome.storage.sync.set({ chatwootNotifications: filteredList }, () => {
-      updateExtensionBadge(filteredList);
-    });
-  });
-}
 
 function showReminderAlarmNotification(reminderId) {
   // Fetch the reminder from synced storage
@@ -444,7 +366,6 @@ function syncAlarms(reminders) {
           console.log(`[Chatwoot Helper] Creating synced alarm for: ${reminder.id}`);
           chrome.alarms.create(reminder.id, { when: reminder.alarmTime });
         } else {
-          // If the alarm time is significantly different, recreate it
           if (Math.abs(existingAlarm.scheduledTime - reminder.alarmTime) > 1000) {
             console.log(`[Chatwoot Helper] Updating synced alarm for: ${reminder.id}`);
             chrome.alarms.create(reminder.id, { when: reminder.alarmTime });
@@ -453,7 +374,6 @@ function syncAlarms(reminders) {
       }
     });
 
-    // Clear alarms that are no longer in the active reminders list
     alarmMap.forEach((alarm, alarmName) => {
       if (!activeReminderIds.has(alarmName)) {
         console.log(`[Chatwoot Helper] Clearing obsolete alarm: ${alarmName}`);
@@ -470,17 +390,101 @@ function syncAlarmsFromStorage() {
   });
 }
 
-// Watch sync storage changes to keep local alarms & badges in sync
+// Watch sync storage changes to keep local alarms in sync
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'sync') {
     if (changes.chatwootReminders) {
       console.log('[Chatwoot Helper] Synced reminders updated. Updating local alarms...');
       syncAlarms(changes.chatwootReminders.newValue || []);
     }
-    if (changes.chatwootNotifications) {
-      console.log('[Chatwoot Helper] Synced notifications updated. Updating badge...');
-      updateBadgeFromStorage();
-    }
   }
 });
+
+// UNREAD BADGE FROM API LOGIC
+async function updateUnreadBadgeFromAPI() {
+  try {
+    const result = await chrome.storage.sync.get(['chatwootSettings']);
+    const savedConfig = result.chatwootSettings;
+    if (!savedConfig || !savedConfig.url || !savedConfig.token) return;
+    
+    let accountId = savedConfig.defaultAccount;
+    if (!accountId) {
+      const profile = await fetchProfile(savedConfig.url, savedConfig.token);
+      if (profile && profile.accounts && profile.accounts.length > 0) {
+        accountId = profile.accounts[0].id;
+      }
+    }
+    if (!accountId) return;
+    
+    const endpoint = `${savedConfig.url}/api/v1/accounts/${accountId}/conversations?status=open&assignee_type=all`;
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'api_access_token': savedConfig.token
+      }
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    
+    const conversations = extractConversationsArray(data);
+    
+    let totalUnread = 0;
+    conversations.forEach(item => {
+      if (item && item.unread_count) {
+        totalUnread += item.unread_count;
+      }
+    });
+    
+    chrome.action.setBadgeText({ text: totalUnread > 0 ? String(totalUnread) : '' });
+    chrome.action.setBadgeBackgroundColor({ color: '#FF3B30' });
+  } catch (err) {
+    console.error('[Chatwoot Helper] Error updating unread badge from API:', err);
+  }
+}
+
+function extractConversationsArray(response) {
+  if (!response) return [];
+  if (Array.isArray(response)) return response;
+  if (Array.isArray(response.payload)) return response.payload;
+  if (response.payload && Array.isArray(response.payload.conversations)) return response.payload.conversations;
+  if (Array.isArray(response.conversations)) return response.conversations;
+  if (Array.isArray(response.data)) return response.data;
+  if (response.data && Array.isArray(response.data.conversations)) return response.data.conversations;
+
+  for (const key of Object.keys(response)) {
+    if (Array.isArray(response[key])) {
+      return response[key];
+    }
+    if (response[key] && typeof response[key] === 'object') {
+      for (const subKey of Object.keys(response[key])) {
+        if (Array.isArray(response[key][subKey])) {
+          return response[key][subKey];
+        }
+      }
+    }
+  }
+  return [];
+}
+
+function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
+  const targetUrl = chrome.runtime.getURL(`popup.html?convId=${conversationId}`);
+  
+  chrome.tabs.query({}, (tabs) => {
+    const existingTab = tabs.find(tab => tab.url && tab.url.startsWith(targetUrl));
+    if (existingTab) {
+      chrome.tabs.update(existingTab.id, { active: true });
+      chrome.windows.update(existingTab.windowId, { focused: true });
+    } else {
+      const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}`);
+      chrome.windows.create({
+        url: url,
+        type: 'popup',
+        width: 380,
+        height: 560,
+        focused: true
+      });
+    }
+  });
+}
 

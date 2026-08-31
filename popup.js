@@ -25,6 +25,11 @@ let currentActiveChat = null;
 let chatPollInterval = null;
 let fetchedConversations = [];
 let currentAccountId = '';
+let isChatWindowMode = false;
+let currentChatMessages = [];
+let hasOlderMessages = false;
+let isLoadingOlderMessages = false;
+let lastRenderedRawHtml = '';
 
 // Attachments & Voice Recording state
 let pendingAttachments = [];
@@ -45,12 +50,22 @@ const elements = {
   // Tab: Reminders
   searchInput: document.getElementById('search-input'),
   remindersList: document.getElementById('reminders-list'),
-  
-  // Tab: Notifications Center
-  notificationsList: document.getElementById('notifications-list'),
-  btnClearAllNotifications: document.getElementById('btn-clear-all-notifications'),
-  notificationBadge: document.getElementById('notification-badge'),
-  
+
+  // Tab: Reports
+  reportsPeriodSelect: document.getElementById('reports-period-select'),
+  reportsHeaderProgress: document.getElementById('reports-header-progress'),
+  reportsContentLoading: document.getElementById('reports-content-loading'),
+  reportsContentError: document.getElementById('reports-content-error'),
+  reportsErrorText: document.getElementById('reports-error-text'),
+  btnRetryReports: document.getElementById('btn-retry-reports'),
+  reportsContentArea: document.getElementById('reports-content-area'),
+  reportValMessages: document.getElementById('report-val-messages'),
+  reportValReplied: document.getElementById('report-val-replied'),
+  reportValResolved: document.getElementById('report-val-resolved'),
+  reportValOpen: document.getElementById('report-val-open'),
+  reportInboxBreakdown: document.getElementById('report-inbox-breakdown'),
+  reportProductivityText: document.getElementById('report-productivity-text'),
+
   // Tab: Save Current
   notChatwootWarning: document.getElementById('not-chatwoot-warning'),
   btnGoToChatwoot: document.getElementById('btn-go-to-chatwoot'),
@@ -95,6 +110,7 @@ const elements = {
   // Tab: Chat Detail
   chatsDetailView: document.querySelector('.chats-detail-view'),
   btnChatBack: document.getElementById('btn-chat-back'),
+  btnChatPopout: document.getElementById('btn-chat-popout'),
   chatHeaderAvatar: document.getElementById('chat-header-avatar'),
   chatHeaderName: document.getElementById('chat-header-name'),
   chatHeaderMeta: document.getElementById('chat-header-meta'),
@@ -105,6 +121,16 @@ const elements = {
 
 // INITIALIZATION
 document.addEventListener('DOMContentLoaded', async () => {
+  // Detect if running in separate chat window mode
+  const urlParams = new URLSearchParams(window.location.search);
+  const paramConvId = urlParams.get('convId');
+  if (paramConvId) {
+    isChatWindowMode = true;
+    document.body.classList.add('chat-window-mode');
+    const contactName = urlParams.get('contactName') || 'Cliente';
+    document.title = `${contactName} - Chatwoot`;
+  }
+
   // Load saved settings
   await loadSettings();
   
@@ -117,29 +143,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Setup tag features
   setupTagHandlers();
   
+  // Setup reports features
+  setupReportsHandlers();
+
   // Check active tab and adjust UI
   await checkActiveTab();
   
   // Load saved reminders
   loadReminders();
   
-  // Load notifications center
-  loadNotifications();
+  // Real-time WebSocket event listener from background.js
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === 'newMessageReceived') {
+      if (!currentActiveChat) {
+        loadConversations();
+      } else if (message.conversationId == currentActiveChat.id) {
+        loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
+      }
+    }
+  });
 
-  // Clear all notifications listener
-  elements.btnClearAllNotifications.addEventListener('click', clearAllNotifications);
-
-  // Sync notifications, reminders, and settings in real-time if storage changes
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'sync') {
-      if (changes.chatwootNotifications) {
-        loadNotifications();
-        // If we are currently showing the conversations list, reload it
-        const chatsTabActive = document.querySelector('.tab-btn[data-tab="chats"]').classList.contains('active');
-        if (chatsTabActive && !currentActiveChat) {
-          loadConversations();
-        }
-      }
       if (changes.chatwootReminders) {
         loadReminders(elements.searchInput.value);
       }
@@ -199,10 +224,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Chat back button
   elements.btnChatBack.addEventListener('click', closeChatView);
 
+  // Chat popout button
+  if (elements.btnChatPopout) {
+    elements.btnChatPopout.addEventListener('click', () => {
+      if (currentActiveChat) {
+        openConversationInWindow(
+          currentActiveChat.id,
+          currentActiveChat.contactName,
+          currentActiveChat.accountId,
+          currentActiveChat.inboxId
+        );
+        closeChatView();
+      }
+    });
+  }
+
   // Chat header action buttons
   const btnChatReminder = document.getElementById('btn-chat-reminder');
   if (btnChatReminder) {
     btnChatReminder.addEventListener('click', createReminderFromActiveChat);
+  }
+
+  const btnReminderBackToChat = document.getElementById('btn-reminder-back-to-chat');
+  if (btnReminderBackToChat) {
+    btnReminderBackToChat.addEventListener('click', (e) => {
+      e.preventDefault();
+      switchTab('chats');
+    });
   }
 
   const btnChatResolve = document.getElementById('btn-chat-resolve');
@@ -489,8 +537,8 @@ function switchTab(tabId) {
     checkActiveTab();
   } else if (tabId === 'reminders') {
     loadReminders();
-  } else if (tabId === 'notifications') {
-    loadNotifications();
+  } else if (tabId === 'reports') {
+    loadReportsDashboard();
   } else if (tabId === 'new-chat') {
     // Populate dropdowns for new chat if connection is good
     if (config.token && config.url) {
@@ -967,6 +1015,9 @@ function handleSaveCurrentSubmit(e) {
         quickReminderSection.classList.add('hidden');
       }
       loadReminders();
+      if (isChatWindowMode) {
+        switchTab('chats');
+      }
     });
   });
 }
@@ -1070,11 +1121,10 @@ function loadReminders(searchQuery = '') {
         </div>
       `;
 
-      // Open conversation directly in the extension when clicking title link
+      // Open conversation directly in a window when clicking title link
       card.querySelector('.reminder-title-link').addEventListener('click', (e) => {
         e.preventDefault();
-        switchTab('chats');
-        openConversationChat(item.conversationId, item.contactName, item.accountId, item.inboxId || '');
+        openConversationInWindow(item.conversationId, item.contactName, item.accountId, item.inboxId || '');
       });
 
       // Open in Chatwoot tab
@@ -1276,10 +1326,9 @@ async function handleNewChatSubmit(e) {
       }
     }
 
-    // Open conversation directly inside the extension popup
-    showToast('Abrindo conversa na extensão...', 'success');
-    switchTab('chats');
-    openConversationChat(conversationId, contactName, accountId, inboxId);
+    // Open conversation in a separate window
+    showToast('Abrindo conversa em nova janela...', 'success');
+    openConversationInWindow(conversationId, contactName, accountId, inboxId);
     
     // Reset form
     elements.newChatPhone.value = '';
@@ -1958,6 +2007,20 @@ function filterAndRenderConversations() {
   }
 }
 
+function getAvatarContent(contactName, avatarUrl) {
+  const initials = contactName ? contactName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'C';
+  if (avatarUrl) {
+    let fullUrl = avatarUrl;
+    if (!fullUrl.startsWith('http')) {
+      const baseUrl = config.url.endsWith('/') ? config.url.slice(0, -1) : config.url;
+      const relativeUrl = avatarUrl.startsWith('/') ? avatarUrl : '/' + avatarUrl;
+      fullUrl = baseUrl + relativeUrl;
+    }
+    return `<img src="${fullUrl}" alt="${contactName}" onerror="this.outerHTML='${initials}';" />`;
+  }
+  return initials;
+}
+
 function renderConversationsList(conversations, accountId) {
   try {
     elements.chatsList.innerHTML = '';
@@ -1976,7 +2039,8 @@ function renderConversationsList(conversations, accountId) {
     conversations.forEach(item => {
       if (!item) return;
       const contactName = item.meta?.sender?.name || 'Cliente';
-      const initials = contactName.split(' ').map(n => n[0]).join('').substring(0, 2);
+      const avatarUrl = item.meta?.sender?.avatar_url;
+      const avatarContent = getAvatarContent(contactName, avatarUrl);
       
       const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
       let lastMsgText = 'Nova conversa criada';
@@ -1995,7 +2059,7 @@ function renderConversationsList(conversations, accountId) {
       card.setAttribute('data-id', item.id);
       
       card.innerHTML = `
-        <div class="chat-item-avatar">${initials}</div>
+        <div class="chat-item-avatar">${avatarContent}</div>
         <div class="chat-item-content">
           <div class="chat-item-top">
             <span class="chat-item-name">${contactName}</span>
@@ -2012,12 +2076,13 @@ function renderConversationsList(conversations, accountId) {
       `;
 
       card.addEventListener('click', () => {
-        openConversationChat(item.id, contactName, accountId, item.inbox_id);
+        openConversationInWindow(item.id, contactName, accountId, item.inbox_id);
       });
 
       elements.chatsList.appendChild(card);
     });
 
+    updateUnreadBadgeLocal();
     resolveInboxNames();
   } catch (err) {
     console.error('Error rendering conversations list:', err);
@@ -2028,6 +2093,20 @@ function renderConversationsList(conversations, accountId) {
       </div>
     `;
   }
+}
+
+function updateUnreadBadgeLocal() {
+  if (!Array.isArray(fetchedConversations)) return;
+  
+  let totalUnread = 0;
+  fetchedConversations.forEach(item => {
+    if (item && item.unread_count && item.status !== 'resolved') {
+      totalUnread += item.unread_count;
+    }
+  });
+  
+  chrome.action.setBadgeText({ text: totalUnread > 0 ? String(totalUnread) : '' });
+  chrome.action.setBadgeBackgroundColor({ color: '#FF3B30' });
 }
 
 
@@ -2048,8 +2127,32 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
     inboxId: inboxId
   };
 
+  currentChatMessages = [];
+  hasOlderMessages = false;
+  isLoadingOlderMessages = false;
+  lastRenderedRawHtml = '';
+
   elements.chatHeaderName.textContent = contactName;
-  elements.chatHeaderAvatar.textContent = contactName.split(' ').map(n => n[0]).join('').substring(0, 2);
+  
+  let avatarUrl = '';
+  if (Array.isArray(fetchedConversations)) {
+    const conversation = fetchedConversations.find(c => c && c.id === conversationId);
+    if (conversation) {
+      avatarUrl = conversation.meta?.sender?.avatar_url || '';
+    }
+  }
+
+  elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, avatarUrl);
+
+  if (!avatarUrl) {
+    chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`)
+      .then(conv => {
+        if (conv && conv.meta?.sender?.avatar_url && currentActiveChat && currentActiveChat.id === conversationId) {
+          elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, conv.meta.sender.avatar_url);
+        }
+      }).catch(err => console.warn('Could not fetch conversation avatar:', err));
+  }
+
   elements.chatHeaderMeta.textContent = 'Carregando caixa de entrada...';
   
   getInboxName(accountId, inboxId).then(inboxName => {
@@ -2072,6 +2175,7 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
       conversation.unread_count = 0;
     }
   }
+  updateUnreadBadgeLocal();
 
   // Instantly remove unread visual indicators from the DOM
   const chatItemEl = elements.chatsList.querySelector(`.chat-item[data-id="${conversationId}"]`);
@@ -2084,6 +2188,21 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   }
 
   elements.chatMessagesArea.innerHTML = '<div style="text-align:center; padding: 20px; color:var(--text-secondary);">Carregando histórico...</div>';
+
+  // Default status button to checkmark (Finalizar)
+  updateChatStatusUI('open');
+
+  // Fetch conversation metadata to get the actual status (open vs resolved)
+  chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`)
+    .then(convData => {
+      if (convData && currentActiveChat && currentActiveChat.id === conversationId) {
+        currentActiveChat.status = convData.status;
+        updateChatStatusUI(convData.status);
+      }
+    })
+    .catch(err => {
+      console.warn('Could not fetch conversation status:', err);
+    });
 
   elements.chatsListView.classList.add('hidden');
   elements.chatsDetailView.classList.remove('hidden');
@@ -2109,30 +2228,132 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   }, 4000);
 }
 
-async function loadChatMessages(accountId, conversationId, silent = false) {
+function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
+  const targetUrl = chrome.runtime.getURL(`popup.html?convId=${conversationId}`);
+  
+  chrome.tabs.query({}, (tabs) => {
+    // Check if a window for this conversation is already open
+    const existingTab = tabs.find(tab => tab.url && tab.url.startsWith(targetUrl));
+    if (existingTab) {
+      chrome.tabs.update(existingTab.id, { active: true });
+      chrome.windows.update(existingTab.windowId, { focused: true });
+    } else {
+      const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}`);
+      chrome.windows.create({
+        url: url,
+        type: 'popup',
+        width: 380,
+        height: 560,
+        focused: true
+      });
+    }
+  });
+}
+
+async function loadChatMessages(accountId, conversationId, silent = false, beforeId = null) {
   try {
-    const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+    let endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
+    if (beforeId) {
+      endpoint += `?before=${beforeId}`;
+    }
+    
     const response = await chatwootFetch(endpoint);
     const messages = Array.isArray(response) ? response : (response?.payload || []);
     
-    messages.sort((a, b) => {
+    if (beforeId) {
+      if (messages.length < 20) {
+        hasOlderMessages = false;
+      } else {
+        hasOlderMessages = true;
+      }
+      
+      messages.forEach(msg => {
+        if (!currentChatMessages.some(m => m.id === msg.id)) {
+          currentChatMessages.push(msg);
+        }
+      });
+    } else {
+      if (currentChatMessages.length === 0) {
+        currentChatMessages = [...messages];
+        if (messages.length >= 20) {
+          hasOlderMessages = true;
+        } else {
+          hasOlderMessages = false;
+        }
+      } else {
+        messages.forEach(newMsg => {
+          const existingIdx = currentChatMessages.findIndex(m => m.id === newMsg.id);
+          if (existingIdx !== -1) {
+            currentChatMessages[existingIdx] = newMsg;
+          } else {
+            currentChatMessages.push(newMsg);
+          }
+        });
+      }
+    }
+    
+    currentChatMessages.sort((a, b) => {
       const timeA = a.created_at || 0;
       const timeB = b.created_at || 0;
       return timeA - timeB;
     });
 
-    renderChatMessages(messages, silent);
+    renderChatMessages(currentChatMessages, silent, beforeId !== null);
   } catch (err) {
     console.error('Error loading chat messages:', err);
-    if (!silent) {
+    if (!silent && currentChatMessages.length === 0) {
       elements.chatMessagesArea.innerHTML = `<div style="text-align:center; padding:20px; color:var(--danger);">Erro ao carregar mensagens: ${err.message}</div>`;
     }
   }
 }
 
-function renderChatMessages(messages, silent) {
-  const isNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 50;
+async function loadOlderMessages() {
+  if (isLoadingOlderMessages || !currentActiveChat) return;
+  
+  const oldestMsg = currentChatMessages[0];
+  if (!oldestMsg) return;
+  
+  isLoadingOlderMessages = true;
+  
+  const btn = document.getElementById('btn-load-older');
+  if (btn) {
+    btn.disabled = true;
+    const spinner = btn.querySelector('.spinner');
+    if (spinner) spinner.classList.remove('hidden');
+  }
+  
+  try {
+    await loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true, oldestMsg.id);
+  } catch (err) {
+    console.error('Error loading older messages:', err);
+    showToast('Erro ao carregar mensagens anteriores.', 'error');
+  } finally {
+    isLoadingOlderMessages = false;
+    if (btn) {
+      btn.disabled = false;
+      const spinner = btn.querySelector('.spinner');
+      if (spinner) spinner.classList.add('hidden');
+    }
+  }
+}
+
+function renderChatMessages(messages, silent, isPrepend = false) {
+  const oldScrollHeight = elements.chatMessagesArea.scrollHeight;
+  const oldScrollTop = elements.chatMessagesArea.scrollTop;
+  const isNearBottom = oldScrollHeight - oldScrollTop - elements.chatMessagesArea.clientHeight < 150;
   let messagesHtml = '';
+
+  // Prepended load button HTML
+  if (hasOlderMessages) {
+    messagesHtml += `
+      <div class="load-older-container" style="text-align: center; padding: 10px 0;">
+        <button type="button" id="btn-load-older" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 12px; margin: 0 auto; display: flex; align-items: center; gap: 6px;">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="spinner hidden"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
+          Carregar mensagens anteriores
+        </button>
+      </div>
+    `;
+  }
 
   const reactionsMap = {};
   const activeMessages = messages.filter(msg => {
@@ -2304,7 +2525,8 @@ function renderChatMessages(messages, silent) {
     });
   }
 
-  if (elements.chatMessagesArea.innerHTML !== messagesHtml) {
+  if (lastRenderedRawHtml !== messagesHtml) {
+    lastRenderedRawHtml = messagesHtml;
     // Check if any audio or video player is currently active/playing to avoid cutting it off
     const playingMedias = elements.chatMessagesArea.querySelectorAll('audio, video');
     const isAnyPlaying = Array.from(playingMedias).some(media => !media.paused && media.currentTime > 0 && !media.ended);
@@ -2315,11 +2537,31 @@ function renderChatMessages(messages, silent) {
 
     elements.chatMessagesArea.innerHTML = messagesHtml;
     
+    // Bind load events to all media elements so that when they finish loading, we scroll down if needed
+    elements.chatMessagesArea.querySelectorAll('img, video, audio').forEach(media => {
+      if (media.tagName.toLowerCase() === 'img') {
+        media.addEventListener('load', () => scrollToBottom());
+      } else {
+        media.addEventListener('loadedmetadata', () => scrollToBottom());
+      }
+    });
+
+    // Bind load older button event listener
+    const btnLoadOlder = document.getElementById('btn-load-older');
+    if (btnLoadOlder) {
+      btnLoadOlder.addEventListener('click', loadOlderMessages);
+    }
+
     // Load link previews asynchronously
     loadLinkPreviews();
 
-    if (!silent || isNearBottom) {
-      elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
+    if (isPrepend) {
+      const newScrollHeight = elements.chatMessagesArea.scrollHeight;
+      elements.chatMessagesArea.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+    } else if (!silent || isNearBottom) {
+      scrollToBottom(true);
+    } else {
+      scrollToBottom();
     }
   } else {
     // Even if innerHTML is identical, make sure previews load if any container is empty
@@ -2328,6 +2570,11 @@ function renderChatMessages(messages, silent) {
 }
 
 function closeChatView() {
+  if (isChatWindowMode) {
+    window.close();
+    return;
+  }
+  lastRenderedRawHtml = '';
   if (chatPollInterval) {
     clearInterval(chatPollInterval);
     chatPollInterval = null;
@@ -2401,9 +2648,13 @@ function createReminderFromActiveChat() {
 async function resolveCurrentConversation() {
   if (!currentActiveChat) return;
 
-  const { id: conversationId, accountId, contactName } = currentActiveChat;
+  const { id: conversationId, accountId, contactName, status } = currentActiveChat;
   
-  if (!confirm(`Deseja realmente finalizar a conversa com ${contactName}?`)) {
+  const isResolved = status === 'resolved';
+  const actionText = isResolved ? 'reabrir' : 'finalizar';
+  const newStatus = isResolved ? 'open' : 'resolved';
+
+  if (!confirm(`Deseja realmente ${actionText} a conversa com ${contactName}?`)) {
     return;
   }
 
@@ -2414,16 +2665,50 @@ async function resolveCurrentConversation() {
     const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/toggle_status`;
     await chatwootFetch(endpoint, {
       method: 'POST',
-      body: JSON.stringify({ status: 'resolved' })
+      body: JSON.stringify({ status: newStatus })
     });
 
-    showToast('Conversa finalizada com sucesso!', 'success');
-    closeChatView();
+    showToast(`Conversa ${isResolved ? 'reaberta' : 'finalizada'} com sucesso!`, 'success');
+    
+    if (isChatWindowMode) {
+      if (newStatus === 'resolved') {
+        window.close();
+      } else {
+        currentActiveChat.status = 'open';
+        updateChatStatusUI('open');
+      }
+    } else {
+      if (newStatus === 'resolved') {
+        closeChatView();
+      } else {
+        currentActiveChat.status = 'open';
+        updateChatStatusUI('open');
+      }
+    }
   } catch (err) {
-    console.error('Error resolving conversation:', err);
-    showToast(`Erro ao finalizar conversa: ${err.message}`, 'error');
+    console.error(`Error toggling conversation status:`, err);
+    showToast(`Erro ao ${actionText} conversa: ${err.message}`, 'error');
   } finally {
     if (btnResolve) btnResolve.disabled = false;
+  }
+}
+
+function updateChatStatusUI(status) {
+  const btnResolve = document.getElementById('btn-chat-resolve');
+  if (!btnResolve) return;
+
+  if (status === 'resolved') {
+    btnResolve.title = 'Reabrir Conversa';
+    btnResolve.style.color = 'var(--warning)';
+    btnResolve.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+    `;
+  } else {
+    btnResolve.title = 'Finalizar Conversa';
+    btnResolve.style.color = 'var(--success)';
+    btnResolve.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    `;
   }
 }
 
@@ -3587,30 +3872,42 @@ function setupLightboxHandlers() {
 function formatWhatsAppMarkdown(text) {
   if (!text) return '';
 
-  // Escape HTML to prevent cross-site scripting (XSS)
-  let escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  // Normalize HTML entity equivalents for markdown symbols that might be returned by Chatwoot backend
+  let formatted = text
+    .replace(/&#42;/g, '*')
+    .replace(/&ast;/g, '*')
+    .replace(/&#95;/g, '_')
+    .replace(/&#126;/g, '~')
+    .replace(/&#96;/g, '`');
 
-  // Convert URLs to clickable hyperlinks
-  escaped = escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="chat-msg-link" rel="noopener noreferrer">$1</a>');
+  const hasHtml = /<[a-z/][^>]*>/i.test(formatted);
+
+  if (!hasHtml) {
+    // Escape HTML to prevent cross-site scripting (XSS)
+    formatted = formatted
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+
+    // Convert URLs to clickable hyperlinks
+    formatted = formatted.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" class="chat-msg-link" rel="noopener noreferrer">$1</a>');
+  }
 
   // Bold: *text* -> <strong>text</strong>
-  escaped = escaped.replace(/\*([^*]+)\*/g, '<strong>$1</strong>');
+  formatted = formatted.replace(/\*([^*]+?)\*/g, '<strong>$1</strong>');
 
   // Italic: _text_ -> <em>text</em>
-  escaped = escaped.replace(/_([^_]+)_/g, '<em>$1</em>');
+  formatted = formatted.replace(/_([^_]+?)_/g, '<em>$1</em>');
 
   // Strikethrough: ~text~ -> <del>text</del>
-  escaped = escaped.replace(/~([^~]+)~/g, '<del>$1</del>');
+  formatted = formatted.replace(/~([^~]+?)~/g, '<del>$1</del>');
 
   // Monospace/Code: `text` -> <code>text</code>
-  escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+  formatted = formatted.replace(/`([^`]+?)`/g, '<code>$1</code>');
 
-  return escaped;
+  return formatted;
 }
 
 // ==========================================
@@ -4062,6 +4359,8 @@ async function loadLinkPreviews() {
 
     const preview = await fetchLinkPreview(url);
     if (preview && (preview.title || preview.description)) {
+      const wasNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 150;
+
       container.innerHTML = `
         <a href="${preview.url}" target="_blank" class="msg-link-preview-card" rel="noopener noreferrer">
           ${preview.image ? `<img src="${preview.image}" alt="Preview" class="link-preview-img">` : ''}
@@ -4072,8 +4371,25 @@ async function loadLinkPreviews() {
           </div>
         </a>
       `;
+      
+      const img = container.querySelector('.link-preview-img');
+      if (img) {
+        img.addEventListener('load', () => scrollToBottom(wasNearBottom));
+      }
+      
+      if (wasNearBottom) {
+        scrollToBottom(true);
+      }
     }
   });
+}
+
+function scrollToBottom(force = false) {
+  if (!elements.chatMessagesArea) return;
+  const isNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 150;
+  if (force || isNearBottom) {
+    elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
+  }
 }
 
 // ==========================================
@@ -4081,6 +4397,7 @@ async function loadLinkPreviews() {
 // ==========================================
 
 function saveNavigationState(updates) {
+  if (isChatWindowMode) return;
   chrome.storage.local.get(['navState'], (result) => {
     const current = result.navState || {};
     const next = Object.assign({}, current, updates);
@@ -4095,6 +4412,17 @@ function saveNavigationState(updates) {
 }
 
 function restoreNavigationState() {
+  if (isChatWindowMode) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const convId = parseInt(urlParams.get('convId'), 10);
+    const contactName = urlParams.get('contactName') || 'Cliente';
+    const accountId = parseInt(urlParams.get('accountId'), 10) || config.defaultAccount;
+    const inboxId = parseInt(urlParams.get('inboxId'), 10) || '';
+    if (convId) {
+      openConversationChat(convId, contactName, accountId, inboxId);
+    }
+    return;
+  }
   chrome.storage.local.get(['navState'], (result) => {
     const state = result.navState || {};
     const activeTab = state.activeTab || 'chats';
@@ -4116,4 +4444,324 @@ function restoreNavigationState() {
     }
   });
 }
+
+let currentReportData = null;
+
+function setupReportsHandlers() {
+  const select = document.getElementById('reports-period-select');
+  if (select) {
+    select.addEventListener('change', () => {
+      loadReportsDashboard(true);
+    });
+  }
+  const btnRetry = document.getElementById('btn-retry-reports');
+  if (btnRetry) {
+    btnRetry.addEventListener('click', () => {
+      loadReportsDashboard();
+    });
+  }
+  const btnPdf = document.getElementById('btn-export-pdf');
+  if (btnPdf) {
+    btnPdf.addEventListener('click', () => {
+      exportReportToPDF();
+    });
+  }
+}
+
+async function exportReportToPDF() {
+  if (!currentReportData) {
+    showToast('Aguarde o carregamento do relatório para exportar.', 'error');
+    return;
+  }
+  
+  try {
+    const profile = await chatwootFetch('/api/v1/profile');
+    const agentName = profile ? profile.name : 'Agente';
+    
+    const periodValue = elements.reportsPeriodSelect.value;
+    let periodLabel = 'Hoje';
+    if (periodValue === '7days') {
+      periodLabel = 'Últimos 7 dias';
+    } else if (periodValue === '30days') {
+      periodLabel = 'Últimos 30 dias';
+    }
+
+    const pdfData = {
+      agentName,
+      periodLabel,
+      messagesSent: currentReportData.messagesSent,
+      repliedCount: currentReportData.repliedCount,
+      resolvedCount: currentReportData.resolvedCount,
+      openCount: currentReportData.openCount,
+      breakdownItems: currentReportData.breakdownItems,
+      productivityText: currentReportData.productivityText
+    };
+
+    chrome.storage.local.set({ pdfReportData: pdfData }, () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('report.html') });
+    });
+  } catch (err) {
+    console.error('Error preparing PDF data:', err);
+    showToast('Erro ao preparar relatório PDF.', 'error');
+  }
+}
+
+async function loadReportsDashboard(silent = false) {
+  if (!config.url || !config.token) {
+    showReportsError('Configurações do Chatwoot não definidas. Acesse a aba "Ajustes".');
+    return;
+  }
+
+  if (!silent) {
+    elements.reportsContentLoading.classList.remove('hidden');
+    elements.reportsContentError.classList.add('hidden');
+    elements.reportsContentArea.classList.add('hidden');
+  }
+
+  // Show subtle linear progress bar and disable control elements while fetching
+  if (elements.reportsHeaderProgress) {
+    elements.reportsHeaderProgress.classList.remove('hidden');
+  }
+  if (elements.reportsPeriodSelect) {
+    elements.reportsPeriodSelect.disabled = true;
+  }
+  const btnPdf = document.getElementById('btn-export-pdf');
+  if (btnPdf) {
+    btnPdf.disabled = true;
+  }
+
+  try {
+    const profile = await chatwootFetch('/api/v1/profile');
+    if (!profile) {
+      throw new Error('Não foi possível obter dados do perfil do agente.');
+    }
+    const currentUserId = profile.id;
+    
+    let accountId = config.defaultAccount;
+    if (!accountId && profile.accounts && profile.accounts.length > 0) {
+      accountId = profile.accounts[0].id;
+    }
+    if (!accountId) {
+      throw new Error('Nenhuma conta Chatwoot encontrada ou selecionada.');
+    }
+
+    const period = elements.reportsPeriodSelect.value;
+    let sinceTimeSeconds = 0;
+    const nowMs = Date.now();
+
+    if (period === 'today') {
+      sinceTimeSeconds = new Date().setHours(0, 0, 0, 0) / 1000;
+    } else if (period === '7days') {
+      sinceTimeSeconds = (nowMs - 7 * 24 * 60 * 60 * 1000) / 1000;
+    } else if (period === '30days') {
+      sinceTimeSeconds = (nowMs - 30 * 24 * 60 * 60 * 1000) / 1000;
+    }
+
+    // 1. Fetch conversations dynamically based on selected period length
+    let maxPages = 1;
+    if (period === '7days') {
+      maxPages = 3;
+    } else if (period === '30days') {
+      maxPages = 6;
+    }
+
+    const pagePromises = [];
+    for (let p = 1; p <= maxPages; p++) {
+      pagePromises.push(
+        chatwootFetch(`/api/v1/accounts/${accountId}/conversations?status=all&assignee_type=all&page=${p}`)
+          .catch(e => {
+            console.warn(`Error fetching page ${p} for reports:`, e);
+            return [];
+          })
+      );
+    }
+    const pagesData = await Promise.all(pagePromises);
+
+    const mergedMap = new Map();
+    pagesData.forEach(pageData => {
+      const pageConvs = extractConversationsArray(pageData);
+      pageConvs.forEach(c => {
+        if (c && c.id) {
+          mergedMap.set(c.id, c);
+        }
+      });
+    });
+    const conversations = Array.from(mergedMap.values());
+
+    // Filter conversations that had any activity in the selected period
+    const activeConversations = conversations.filter(c => {
+      if (!c) return false;
+      const ts = c.last_activity_at || c.timestamp || 0;
+      return ts >= sinceTimeSeconds;
+    });
+
+    // 2. Fetch full message history for active conversations in parallel
+    const messagesFetchPromises = activeConversations.map(async (conv) => {
+      try {
+        const msgsData = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conv.id}/messages`);
+        conv.fullMessages = Array.isArray(msgsData) ? msgsData : (msgsData?.payload || []);
+      } catch (e) {
+        console.warn(`Error fetching messages for conversation ${conv.id}:`, e);
+        conv.fullMessages = Array.isArray(conv.messages) ? conv.messages : [];
+      }
+    });
+    await Promise.all(messagesFetchPromises);
+
+    // 3. Compute stats client-side using full message history
+    let messagesSent = 0;
+    let repliedCount = 0;
+    let resolvedCount = 0;
+    let openCount = 0;
+    const inboxMetrics = {};
+
+    conversations.forEach(item => {
+      if (!item) return;
+
+      const msgs = Array.isArray(item.fullMessages) ? item.fullMessages : (Array.isArray(item.messages) ? item.messages : []);
+      
+      let hasOutgoingFromMeInPeriod = false;
+      let hasOutgoingFromMeEver = false;
+      
+      msgs.forEach(msg => {
+        if (!msg) return;
+        
+        const isOutgoing = msg.message_type === 1 || msg.message_type === 'outgoing';
+        const isMe = msg.sender && msg.sender.id === currentUserId;
+
+        if (isOutgoing && isMe) {
+          hasOutgoingFromMeEver = true;
+          
+          const inPeriod = msg.created_at >= sinceTimeSeconds;
+          if (inPeriod) {
+            messagesSent++;
+            hasOutgoingFromMeInPeriod = true;
+          }
+        }
+      });
+
+      const hasMeInteracted = (item.meta?.assignee?.id === currentUserId) || hasOutgoingFromMeEver;
+
+      if (item.status === 'open' && hasMeInteracted) {
+        openCount++;
+      }
+      if (item.status === 'resolved' && item.updated_at >= sinceTimeSeconds && hasMeInteracted) {
+        resolvedCount++;
+      }
+
+      if (hasOutgoingFromMeInPeriod) {
+        repliedCount++;
+
+        const inboxId = item.inbox_id;
+        if (inboxId) {
+          inboxMetrics[inboxId] = (inboxMetrics[inboxId] || 0) + 1;
+        }
+      }
+    });
+
+    const breakdownItems = [];
+    for (const [inboxId, count] of Object.entries(inboxMetrics)) {
+      const name = await getInboxName(accountId, inboxId) || `Caixa #${inboxId}`;
+      breakdownItems.push({ id: inboxId, name, count });
+    }
+    breakdownItems.sort((a, b) => b.count - a.count);
+
+    elements.reportValMessages.textContent = messagesSent;
+    elements.reportValReplied.textContent = repliedCount;
+    elements.reportValResolved.textContent = resolvedCount;
+    elements.reportValOpen.textContent = openCount;
+
+    elements.reportInboxBreakdown.innerHTML = '';
+    if (breakdownItems.length === 0) {
+      elements.reportInboxBreakdown.innerHTML = `<div style="text-align: center; font-size: 11px; color: var(--text-muted); padding: 10px 0;">Nenhuma conversa ativa com você por caixa de entrada no período.</div>`;
+    } else {
+      const maxCount = breakdownItems[0].count || 1;
+      breakdownItems.forEach(item => {
+        const percentage = Math.round((item.count / maxCount) * 100);
+        const itemEl = document.createElement('div');
+        itemEl.className = 'report-breakdown-item';
+        itemEl.innerHTML = `
+          <div class="report-breakdown-info">
+            <span class="report-breakdown-name">${item.name}</span>
+            <span class="report-breakdown-count">${item.count} ${item.count === 1 ? 'atendimento' : 'atendimentos'}</span>
+          </div>
+          <div class="report-breakdown-bar-bg">
+            <div class="report-breakdown-bar-fill" style="width: ${percentage}%"></div>
+          </div>
+        `;
+        elements.reportInboxBreakdown.appendChild(itemEl);
+      });
+    }
+
+    let insightText = '';
+    const maxInbox = breakdownItems[0];
+
+    if (messagesSent === 0 && repliedCount === 0 && resolvedCount === 0) {
+      insightText = `Nenhuma atividade de resposta registrada por você no período selecionado. Continue monitorando seus atendimentos na lista de chats!`;
+    } else {
+      insightText = `No período selecionado, você teve um desempenho produtivo: enviou <strong>${messagesSent} mensagens</strong> e atendeu ativamente <strong>${repliedCount} conversas</strong>. `;
+      
+      if (resolvedCount > 0) {
+        insightText += `Conseguiu finalizar e resolver com sucesso <strong>${resolvedCount} atendimentos</strong>, reduzindo a fila de espera. `;
+      } else {
+        insightText += `Nenhum atendimento foi finalizado ainda neste período. `;
+      }
+      
+      if (openCount > 0) {
+        insightText += `Atualmente, você possui <strong>${openCount} conversas em andamento</strong> sob sua responsabilidade que requerem atenção contínua. `;
+      }
+      
+      if (maxInbox && maxInbox.count > 0) {
+        insightText += `Sua caixa de entrada mais movimentada foi a <strong>${maxInbox.name}</strong>, onde você concentrou <strong>${maxInbox.count} atendimentos</strong>. `;
+      }
+      
+      if (resolvedCount >= 5) {
+        insightText += `<br><br>✨ <strong>Excelente produtividade!</strong> Você está finalizando atendimentos de forma ágil e eficaz. Parabéns!`;
+      } else {
+        insightText += `<br><br>👍 <strong>Bom trabalho!</strong> Continue prestando suporte de excelência aos clientes.`;
+      }
+    }
+    elements.reportProductivityText.innerHTML = insightText;
+
+    currentReportData = {
+      messagesSent,
+      repliedCount,
+      resolvedCount,
+      openCount,
+      breakdownItems,
+      productivityText: insightText
+    };
+
+    hideReportsProgress();
+    elements.reportsContentLoading.classList.add('hidden');
+    elements.reportsContentError.classList.add('hidden');
+    elements.reportsContentArea.classList.remove('hidden');
+
+  } catch (err) {
+    console.error('Error loading reports dashboard:', err);
+    hideReportsProgress();
+    showReportsError(err.message || 'Erro ao carregar dados de relatórios.');
+  }
+}
+
+function showReportsError(message) {
+  elements.reportsErrorText.textContent = message;
+  hideReportsProgress();
+  elements.reportsContentLoading.classList.add('hidden');
+  elements.reportsContentArea.classList.add('hidden');
+  elements.reportsContentError.classList.remove('hidden');
+}
+
+function hideReportsProgress() {
+  if (elements.reportsHeaderProgress) {
+    elements.reportsHeaderProgress.classList.add('hidden');
+  }
+  if (elements.reportsPeriodSelect) {
+    elements.reportsPeriodSelect.disabled = false;
+  }
+  const btnPdf = document.getElementById('btn-export-pdf');
+  if (btnPdf) {
+    btnPdf.disabled = false;
+  }
+}
+
 
