@@ -47,6 +47,12 @@ chrome.runtime.onMessage.addListener((message) => {
     console.log('[Chatwoot Helper] Settings updated. Reconnecting WebSocket...');
     initConnection(true); // Force reconnect even if another initialization is in progress
     updateUnreadBadgeFromAPI();
+  } else if (message.action === 'conversationRead') {
+    // User opened a conversation and marked it as read — refresh icon badge
+    updateUnreadBadgeFromAPI();
+  } else if (message.action === 'messageSentByAgent' || message.action === 'conversationStatusChanged') {
+    // Agent sent a message or changed conversation status — refresh icon badge
+    updateUnreadBadgeFromAPI();
   }
 });
 

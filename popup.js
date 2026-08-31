@@ -23,13 +23,15 @@ let availableLabels = [];
 let activeChatFilter = 'progress';
 let currentActiveChat = null;
 let chatPollInterval = null;
-let fetchedConversations = [];
+let fetchedConversations = [];  // Active tab conversations (open or resolved depending on filter)
+let openConversationsCache = []; // Always open conversations (for badges + new/progress filters)
 let currentAccountId = '';
 let isChatWindowMode = false;
 let currentChatMessages = [];
 let hasOlderMessages = false;
 let isLoadingOlderMessages = false;
 let lastRenderedRawHtml = '';
+let currentUserId = null;
 
 // Attachments & Voice Recording state
 let pendingAttachments = [];
@@ -133,6 +135,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load saved settings
   await loadSettings();
+
+  // Retrieve user profile to establish currentUserId globally
+  if (config.url && config.token) {
+    chatwootFetch('/api/v1/profile').then(profile => {
+      if (profile) {
+        currentUserId = profile.id;
+      }
+    }).catch(err => console.warn('Could not load profile on init:', err));
+  }
   
   // Setup tab navigation
   setupTabs();
@@ -152,14 +163,61 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load saved reminders
   loadReminders();
   
-  // Real-time WebSocket event listener from background.js
+  // Real-time WebSocket and interaction event listener from background.js/popup.js
   chrome.runtime.onMessage.addListener((message) => {
-    if (message.action === 'newMessageReceived') {
-      if (!currentActiveChat) {
-        loadConversations();
-      } else if (message.conversationId == currentActiveChat.id) {
+    if (message.action === 'newMessageReceived' || message.action === 'messageSentByAgent') {
+      // Find the conversation in the open cache
+      const convInCache = openConversationsCache.find(c => c && c.id == message.conversationId);
+
+      if (message.action === 'newMessageReceived') {
+        if (convInCache) {
+          // Increment unread count for this conversation in both caches
+          convInCache.unread_count = (convInCache.unread_count || 0) + 1;
+          const inFetched = fetchedConversations.find(c => c && c.id == message.conversationId);
+          if (inFetched) inFetched.unread_count = convInCache.unread_count;
+          updateUnreadBadgeLocal();
+          filterAndRenderConversations();
+        } else {
+          // Conversation not in cache — do a full reload to fetch it
+          loadConversations();
+        }
+      } else if (message.action === 'messageSentByAgent') {
+        // Update both caches to keep them in sync
+        const updateConv = (arr) => {
+          const conversation = arr.find(c => c && c.id == message.conversationId);
+          if (conversation) {
+            if (!conversation.first_reply_created_at) {
+              conversation.first_reply_created_at = Math.floor(Date.now() / 1000);
+            }
+            conversation.unread_count = 0;
+          }
+        };
+        updateConv(openConversationsCache);
+        updateConv(fetchedConversations);
+        updateUnreadBadgeLocal();
+        filterAndRenderConversations();
+      }
+
+      // Message bubbles update
+      if (currentActiveChat && message.conversationId == currentActiveChat.id) {
         loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
       }
+    } else if (message.action === 'conversationStatusChanged') {
+      // Mark conversation as resolved in openConversationsCache so it disappears from new/progress filters
+      const markStatus = (arr) => {
+        const conversation = arr.find(c => c && c.id == message.conversationId);
+        if (conversation) {
+          conversation.status = message.status;
+        }
+      };
+      markStatus(openConversationsCache);
+      markStatus(fetchedConversations);
+
+      // Update local unread counter and badges
+      updateUnreadBadgeLocal();
+
+      // Trigger live re-filtering and rendering of the conversations list
+      filterAndRenderConversations();
     }
   });
 
@@ -1624,6 +1682,7 @@ async function sendQuickReply(accountId, conversationId, inputEl, buttonEl) {
     });
 
     showToast('Resposta enviada com sucesso!', 'success');
+    notifyMessageSent(conversationId, accountId);
     
     // Remove notifications for this conversation on success
     deleteConversationNotifications(accountId, conversationId);
@@ -1657,6 +1716,7 @@ async function sendReminderReply(accountId, conversationId, inputEl, buttonEl) {
     });
 
     showToast('Resposta enviada com sucesso!', 'success');
+    notifyMessageSent(conversationId, accountId);
     inputEl.value = ''; // Clean input field
   } catch (err) {
     console.error('Error sending reminder reply:', err);
@@ -1946,12 +2006,18 @@ async function loadConversations() {
 
     currentAccountId = accountId;
     
-    // For 'resolved' filter, query resolved conversations. Otherwise, query open/active ones.
-    const statusParam = activeChatFilter === 'resolved' ? 'resolved' : 'open';
-    const endpoint = `/api/v1/accounts/${accountId}/conversations?status=${statusParam}&assignee_type=all`;
-    const response = await chatwootFetch(endpoint);
-    
-    fetchedConversations = extractConversationsArray(response);
+    // Always load open conversations to populate the cache for badges + new/progress filters
+    const openRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations?status=open&assignee_type=all`);
+    openConversationsCache = extractConversationsArray(openRes);
+
+    // For resolved filter, also load resolved conversations
+    if (activeChatFilter === 'resolved') {
+      const resolvedRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations?status=resolved&assignee_type=all`);
+      fetchedConversations = extractConversationsArray(resolvedRes);
+    } else {
+      // For new/progress filters, use the open conversations cache
+      fetchedConversations = openConversationsCache;
+    }
     
     fetchedConversations.sort((a, b) => {
       if (!a || !b) return 0;
@@ -1959,6 +2025,21 @@ async function loadConversations() {
       const timeB = b.last_activity_at || b.timestamp || 0;
       return timeB - timeA;
     });
+
+    // Calculate unread totals for Novas (New) and Em Atendimento (In Progress)
+    let newUnreadCount = 0;
+    let progressUnreadCount = 0;
+    openConversationsCache.forEach(item => {
+      if (item && item.unread_count > 0) {
+        if (!item.first_reply_created_at) {
+          newUnreadCount += item.unread_count;
+        } else {
+          progressUnreadCount += item.unread_count;
+        }
+      }
+    });
+
+    updateFilterBadges(newUnreadCount, progressUnreadCount);
 
     filterAndRenderConversations();
   } catch (err) {
@@ -1977,12 +2058,24 @@ function filterAndRenderConversations() {
   try {
     const query = elements.chatsSearchInput.value.trim().toLowerCase();
     
-    const filtered = fetchedConversations.filter(item => {
+    // Decide which source array to use based on active filter
+    let sourceConversations;
+    if (activeChatFilter === 'resolved') {
+      // For resolved: use fetchedConversations (contains resolved ones when that tab is active)
+      sourceConversations = fetchedConversations.filter(item => item && item.status === 'resolved');
+    } else {
+      // For new/progress: prefer openConversationsCache (always open convs)
+      // Fall back to fetchedConversations if cache is still empty (e.g. first load race condition)
+      const openSource = openConversationsCache.length > 0 ? openConversationsCache : fetchedConversations;
+      sourceConversations = openSource.filter(item => item && item.status !== 'resolved');
+    }
+
+    const filtered = sourceConversations.filter(item => {
       if (!item) return false;
       
       // Stage-based filters (New vs In Progress)
-      // New: status is active AND first_reply_created_at is null/empty
-      // In Progress: status is active AND first_reply_created_at is set
+      // New: first_reply_created_at is null/empty (never replied to)
+      // In Progress: first_reply_created_at is set (already replied)
       if (activeChatFilter === 'new') {
         if (item.first_reply_created_at) return false;
       } else if (activeChatFilter === 'progress') {
@@ -2096,10 +2189,13 @@ function renderConversationsList(conversations, accountId) {
 }
 
 function updateUnreadBadgeLocal() {
-  if (!Array.isArray(fetchedConversations)) return;
+  // Always use openConversationsCache (always open convs, regardless of active filter)
+  const source = Array.isArray(openConversationsCache) && openConversationsCache.length > 0
+    ? openConversationsCache
+    : (Array.isArray(fetchedConversations) ? fetchedConversations : []);
   
   let totalUnread = 0;
-  fetchedConversations.forEach(item => {
+  source.forEach(item => {
     if (item && item.unread_count && item.status !== 'resolved') {
       totalUnread += item.unread_count;
     }
@@ -2107,6 +2203,43 @@ function updateUnreadBadgeLocal() {
   
   chrome.action.setBadgeText({ text: totalUnread > 0 ? String(totalUnread) : '' });
   chrome.action.setBadgeBackgroundColor({ color: '#FF3B30' });
+
+  // Update filter chip badges using the open conversations cache
+  let newUnread = 0;
+  let progressUnread = 0;
+  source.forEach(item => {
+    if (item && item.unread_count > 0 && item.status !== 'resolved') {
+      if (!item.first_reply_created_at) {
+        newUnread += item.unread_count;
+      } else {
+        progressUnread += item.unread_count;
+      }
+    }
+  });
+  updateFilterBadges(newUnread, progressUnread);
+}
+
+function updateFilterBadges(newCount, progressCount) {
+  const badgeNew = document.getElementById('badge-filter-new');
+  const badgeProgress = document.getElementById('badge-filter-progress');
+
+  if (badgeNew) {
+    if (newCount > 0) {
+      badgeNew.textContent = newCount;
+      badgeNew.classList.remove('hidden');
+    } else {
+      badgeNew.classList.add('hidden');
+    }
+  }
+
+  if (badgeProgress) {
+    if (progressCount > 0) {
+      badgeProgress.textContent = progressCount;
+      badgeProgress.classList.remove('hidden');
+    } else {
+      badgeProgress.classList.add('hidden');
+    }
+  }
 }
 
 
@@ -2168,13 +2301,13 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
     console.error('Error marking conversation as read:', err);
   });
 
-  // Update local model unread count
-  if (Array.isArray(fetchedConversations)) {
-    const conversation = fetchedConversations.find(c => c && c.id === conversationId);
-    if (conversation) {
-      conversation.unread_count = 0;
+  // Update local model unread count in BOTH caches
+  [fetchedConversations, openConversationsCache].forEach(arr => {
+    if (Array.isArray(arr)) {
+      const conversation = arr.find(c => c && c.id === conversationId);
+      if (conversation) conversation.unread_count = 0;
     }
-  }
+  });
   updateUnreadBadgeLocal();
 
   // Instantly remove unread visual indicators from the DOM
@@ -2231,6 +2364,39 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
 function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
   const targetUrl = chrome.runtime.getURL(`popup.html?convId=${conversationId}`);
   
+  // Clean unread status in BOTH caches instantly for a premium responsive feel
+  const clearUnread = (arr) => {
+    if (!Array.isArray(arr)) return;
+    const conversation = arr.find(c => c && c.id === conversationId);
+    if (conversation) {
+      conversation.unread_count = 0;
+    }
+  };
+  clearUnread(fetchedConversations);
+  clearUnread(openConversationsCache);
+  updateUnreadBadgeLocal();
+
+  if (elements.chatsList) {
+    const card = elements.chatsList.querySelector(`[data-id="${conversationId}"]`);
+    if (card) {
+      card.classList.remove('unread');
+      const badge = card.querySelector('.chat-item-badge');
+      if (badge) {
+        badge.remove();
+      }
+    }
+  }
+
+  // Update last seen API call immediately
+  chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}/update_last_seen`, {
+    method: 'POST'
+  }).then(() => {
+    // Tell background service worker to refresh the icon badge from API
+    chrome.runtime.sendMessage({ action: 'conversationRead' }).catch(() => {});
+  }).catch(err => {
+    console.error('Error marking conversation as read on click:', err);
+  });
+
   chrome.tabs.query({}, (tabs) => {
     // Check if a window for this conversation is already open
     const existingTab = tabs.find(tab => tab.url && tab.url.startsWith(targetUrl));
@@ -2479,8 +2645,10 @@ function renderChatMessages(messages, silent, isPrepend = false) {
 
       if (bubbleClass.includes('activity')) {
         messagesHtml += `
-          <div class="${bubbleClass}">
-            ${contentHtml}
+          <div class="chat-msg-row activity">
+            <div class="${bubbleClass}">
+              ${contentHtml}
+            </div>
           </div>
         `;
       } else {
@@ -2509,18 +2677,63 @@ function renderChatMessages(messages, silent, isPrepend = false) {
           }
         }
 
-        messagesHtml += `
-          <div class="${bubbleClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
-            <button type="button" class="btn-msg-menu" title="Opções da mensagem">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-            </button>
-            ${quoteHtml}
-            ${contentHtml}
-            ${linkPreviewHtml}
-            ${reactionsHtml}
-            <span class="chat-msg-time">${timeStr}</span>
-          </div>
-        `;
+        // Differentiate color for other agents
+        const senderId = msg.sender ? msg.sender.id : null;
+        let agentColorClass = '';
+        const isOutgoing = type === 1 || type === 'outgoing' || type === 3 || type === 'template';
+        if (isOutgoing) {
+          if (senderId && currentUserId && senderId !== currentUserId) {
+            const colorIndex = Math.abs(senderId) % 4;
+            agentColorClass = ` agent-color-${colorIndex}`;
+          }
+        }
+
+        // Generate avatar HTML
+        let avatarUrl = msg.sender?.avatar_url || '';
+        if (avatarUrl && !avatarUrl.startsWith('http')) {
+          const baseUrl = config.url.endsWith('/') ? config.url.slice(0, -1) : config.url;
+          const relativeUrl = avatarUrl.startsWith('/') ? avatarUrl : '/' + avatarUrl;
+          avatarUrl = baseUrl + relativeUrl;
+        }
+
+        const initials = senderName ? senderName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : '?';
+        const avatarHtml = avatarUrl
+          ? `<img src="${avatarUrl}" class="chat-msg-sender-avatar" title="${senderName}" alt="${senderName}" onerror="this.outerHTML='<div class=&quot;chat-msg-sender-avatar-initials&quot; title=&quot;${senderName}&quot;>${initials}</div>';" />`
+          : `<div class="chat-msg-sender-avatar-initials" title="${senderName}">${initials}</div>`;
+
+        if (isOutgoing) {
+          messagesHtml += `
+            <div class="chat-msg-row outgoing">
+              <div class="${bubbleClass}${agentColorClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
+                <button type="button" class="btn-msg-menu" title="Opções da mensagem">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                ${quoteHtml}
+                ${contentHtml}
+                ${linkPreviewHtml}
+                ${reactionsHtml}
+                <span class="chat-msg-time">${timeStr}</span>
+              </div>
+              ${avatarHtml}
+            </div>
+          `;
+        } else {
+          messagesHtml += `
+            <div class="chat-msg-row incoming">
+              ${avatarHtml}
+              <div class="${bubbleClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
+                <button type="button" class="btn-msg-menu" title="Opções da mensagem">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                ${quoteHtml}
+                ${contentHtml}
+                ${linkPreviewHtml}
+                ${reactionsHtml}
+                <span class="chat-msg-time">${timeStr}</span>
+              </div>
+            </div>
+          `;
+        }
       }
     });
   }
@@ -2669,6 +2882,7 @@ async function resolveCurrentConversation() {
     });
 
     showToast(`Conversa ${isResolved ? 'reaberta' : 'finalizada'} com sucesso!`, 'success');
+    notifyConversationStatusChanged(conversationId, newStatus);
     
     if (isChatWindowMode) {
       if (newStatus === 'resolved') {
@@ -2754,6 +2968,7 @@ async function sendChatMessage(e) {
       elements.chatReplyInput.style.height = 'auto'; // Reset textarea height
       cancelMessageEdit();
       await loadChatMessages(accountId, conversationId, true);
+      notifyMessageSent(conversationId, accountId);
       return;
     }
 
@@ -2800,6 +3015,7 @@ async function sendChatMessage(e) {
     renderAttachmentsPreview();
     cancelMessageReply();
     
+    notifyMessageSent(conversationId, accountId);
     await loadChatMessages(accountId, conversationId, true);
   } catch (err) {
     console.error('Error sending message:', err);
@@ -3654,6 +3870,7 @@ async function sendAudioMessage(file) {
     });
 
     showToast('Áudio enviado com sucesso!', 'success');
+    notifyMessageSent(conversationId, accountId);
     await loadChatMessages(accountId, conversationId, true);
   } catch (err) {
     console.error('Error sending audio message:', err);
@@ -4765,6 +4982,22 @@ function hideReportsProgress() {
   if (btnPdf) {
     btnPdf.disabled = false;
   }
+}
+
+function notifyMessageSent(conversationId, accountId) {
+  chrome.runtime.sendMessage({
+    action: 'messageSentByAgent',
+    conversationId: conversationId,
+    accountId: accountId
+  }).catch(() => {});
+}
+
+function notifyConversationStatusChanged(conversationId, newStatus) {
+  chrome.runtime.sendMessage({
+    action: 'conversationStatusChanged',
+    conversationId: conversationId,
+    status: newStatus
+  }).catch(() => {});
 }
 
 

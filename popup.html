@@ -59,9 +59,15 @@
           </div>
           
           <div class="chats-filter-bar">
-            <button class="filter-chip" data-filter="new">Novas</button>
-            <button class="filter-chip active" data-filter="progress">Em Atendimento</button>
-            <button class="filter-chip" data-filter="resolved">Concluídas</button>
+            <button class="filter-chip" data-filter="new" id="btn-filter-new">
+              Novas
+              <span class="filter-badge hidden" id="badge-filter-new">0</span>
+            </button>
+            <button class="filter-chip active" data-filter="progress" id="btn-filter-progress">
+              Em Atendimento
+              <span class="filter-badge hidden" id="badge-filter-progress">0</span>
+            </button>
+            <button class="filter-chip" data-filter="resolved" id="btn-filter-resolved">Concluídas</button>
           </div>
 
           <div class="chats-container" id="chats-list">
