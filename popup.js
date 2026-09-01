@@ -471,16 +471,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Formatting toolbar setup
-  const btnFormats = document.querySelectorAll('.btn-format');
-  btnFormats.forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const symbol = btn.getAttribute('data-symbol');
-      applyFormatting(elements.chatReplyInput, symbol);
-    });
-  });
-
   // Emoji picker setup
   setupEmojiPicker();
 
@@ -502,6 +492,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       chatFileInput.value = ''; // Reset to allow re-selection
     });
   }
+
+
 
   // Audio recording trigger & controls
   const btnAudioRecord = document.getElementById('btn-audio-record');
