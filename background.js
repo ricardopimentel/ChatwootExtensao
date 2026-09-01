@@ -184,7 +184,20 @@ async function chatwootFetch(endpoint, options = {}) {
     throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return {};
+  }
+
+  const text = await response.text();
+  if (!text || !text.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return {};
+  }
 }
 
 function connectWebSocket() {

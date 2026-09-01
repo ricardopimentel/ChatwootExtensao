@@ -1196,7 +1196,20 @@ async function chatwootFetch(endpoint, options = {}) {
     throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return {};
+  }
+
+  const text = await response.text();
+  if (!text || !text.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return {};
+  }
 }
 
 async function updateConnectionStatus() {
@@ -4103,6 +4116,8 @@ function createReminderFromActiveChat() {
   elements.saveTitle.focus();
 }
 
+const sentTranscriptsSet = new Set();
+
 async function resolveCurrentConversation() {
   if (!currentActiveChat) return;
 
@@ -4132,7 +4147,10 @@ async function resolveCurrentConversation() {
     if (newStatus === 'resolved') {
       const autoTranscriptCheck = document.getElementById('settings-auto-transcript-email');
       const shouldSend = autoTranscriptCheck ? autoTranscriptCheck.checked : (config.autoTranscriptEmail !== false);
-      if (shouldSend) {
+      const transcriptKey = `${accountId}_${conversationId}`;
+      
+      if (shouldSend && !sentTranscriptsSet.has(transcriptKey)) {
+        sentTranscriptsSet.add(transcriptKey);
         try {
           let agentEmail = config.agentEmail;
           if (!agentEmail) {
@@ -4152,6 +4170,7 @@ async function resolveCurrentConversation() {
           }
         } catch (tErr) {
           console.warn('Could not send transcript email:', tErr.message);
+          showToast(`Aviso: Servidor de e-mail do Chatwoot indisponível (${tErr.message})`, 'info');
         }
       }
     }
