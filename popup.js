@@ -158,7 +158,11 @@ const elements = {
   chatMessagesArea: document.getElementById('chat-messages-area'),
   chatReplyBar: document.getElementById('chat-reply-bar'),
   chatReplyInput: document.getElementById('chat-reply-input'),
-  btnTogglePrivateNote: document.getElementById('btn-toggle-private-note')
+  btnTogglePrivateNote: document.getElementById('btn-toggle-private-note'),
+  mentionPicker: document.getElementById('mention-picker'),
+  mentionPickerList: document.getElementById('mention-picker-list'),
+  mentionChipsBar: document.getElementById('mention-chips-bar'),
+  mentionChipsList: document.getElementById('mention-chips-list')
 };
 
 // INITIALIZATION
@@ -447,6 +451,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Toggle Private Note mode
   if (elements.btnTogglePrivateNote) {
     elements.btnTogglePrivateNote.addEventListener('click', togglePrivateNoteMode);
+  }
+
+  // Agent Mention Event Listeners
+  if (elements.chatReplyInput) {
+    elements.chatReplyInput.addEventListener('input', handleChatInputForMentions);
+    elements.chatReplyInput.addEventListener('keydown', handleChatKeydownForMentions);
   }
 
   // Chat reply submit
@@ -3842,10 +3852,13 @@ function renderChatMessages(messages, silent, isPrepend = false) {
   } else {
     activeMessages.forEach(msg => {
       const type = msg.message_type;
-      const isPrivateNote = msg.private === true || type === 2 || type === 'private';
+      const isActivity = type === 2 || type === 'activity';
+      const isPrivateNote = (msg.private === true || type === 'private') && !isActivity;
       
       let bubbleClass = 'chat-msg-bubble';
-      if (isPrivateNote) {
+      if (isActivity) {
+        bubbleClass += ' activity';
+      } else if (isPrivateNote) {
         bubbleClass += ' private-note';
       } else if (type === 0 || type === 'incoming') {
         bubbleClass += ' incoming';
@@ -4308,12 +4321,22 @@ async function sendChatMessage(e) {
 
     const endpoint = `/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`;
     
+    // Convert clean @Agent Name text into Chatwoot Markdown format before sending
+    let processedText = replyText;
+    if (activeMentionedAgents.length > 0) {
+      activeMentionedAgents.forEach(agent => {
+        const cleanTag = `@${agent.name}`;
+        const chatwootTag = `[@${agent.name}](mention://user/${agent.id}/${encodeURIComponent(agent.name)})`;
+        processedText = processedText.split(cleanTag).join(chatwootTag);
+      });
+    }
+
     let bodyData;
     if (pendingAttachments.length > 0) {
       bodyData = new FormData();
       bodyData.append('message_type', 'outgoing');
       bodyData.append('private', String(isPrivateNoteMode));
-      bodyData.append('content', replyText || ''); // Always append content parameter
+      bodyData.append('content', processedText || ''); // Always append content parameter
       if (replyParentMessageId) {
         bodyData.append('parent_id', replyParentMessageId);
         bodyData.append('content_attributes[in_reply_to]', replyParentMessageId);
@@ -4323,7 +4346,7 @@ async function sendChatMessage(e) {
       });
     } else {
       const payload = {
-        content: replyText,
+        content: processedText,
         message_type: 'outgoing',
         private: isPrivateNoteMode
       };
@@ -4343,6 +4366,8 @@ async function sendChatMessage(e) {
 
     elements.chatReplyInput.value = '';
     elements.chatReplyInput.style.height = 'auto'; // Reset textarea height
+    activeMentionedAgents = [];
+    updateMentionChipsUI();
     
     // Clear pending attachments & replies
     pendingAttachments = [];
@@ -5493,6 +5518,9 @@ function formatWhatsAppMarkdown(text) {
   // Monospace/Code: `text` -> <code>text</code>
   formatted = formatted.replace(/`([^`]+?)`/g, '<code>$1</code>');
 
+  // Format Chatwoot Mentions: [@Agent Name](mention://user/123/Agent%20Name) -> Badge
+  formatted = formatted.replace(/\[@([^\]]+)\]\(mention:\/\/user\/\d+\/[^\)]+\)/g, '<span class="chat-mention-badge">@$1</span>');
+
   return formatted;
 }
 
@@ -6513,9 +6541,8 @@ function togglePrivateNoteMode() {
     btn.classList.add('active');
     if (unlockedIcon) unlockedIcon.classList.add('hidden');
     if (lockedIcon) lockedIcon.classList.remove('hidden');
-    input.placeholder = 'Digite uma nota privada (visível apenas para a equipe)...';
+    input.placeholder = 'Digite uma nota privada...';
     btn.title = 'Modo Nota Privada ATIVO (Clique para voltar para mensagem pública)';
-    showToast('🔒 Modo Nota Privada ativado', 'info');
   } else {
     replyContainer.classList.remove('private-mode');
     btn.classList.remove('active');
@@ -6523,7 +6550,212 @@ function togglePrivateNoteMode() {
     if (lockedIcon) lockedIcon.classList.add('hidden');
     input.placeholder = 'Digite uma mensagem...';
     btn.title = 'Alternar modo Nota Privada (visível apenas para a equipe)';
+    
+    // Clear mentions when returning to public message mode
+    activeMentionedAgents = [];
+    if (elements.mentionPicker) elements.mentionPicker.classList.add('hidden');
+    if (elements.mentionChipsBar) elements.mentionChipsBar.classList.add('hidden');
   }
+}
+
+// AGENT MENTIONS (@mention)
+let accountAgentsCache = {};
+let filteredAgentsList = [];
+let selectedMentionIndex = 0;
+
+async function fetchAccountAgents(accountId) {
+  if (!accountId) return [];
+  if (accountAgentsCache[accountId]) return accountAgentsCache[accountId];
+
+  try {
+    let agents = await chatwootFetch(`/api/v1/accounts/${accountId}/agents`).catch(() => null);
+    if (!agents || !Array.isArray(agents)) {
+      agents = await chatwootFetch(`/api/v1/accounts/${accountId}/account_users`).catch(() => []);
+    }
+    if (Array.isArray(agents)) {
+      accountAgentsCache[accountId] = agents;
+      return agents;
+    }
+  } catch (err) {
+    console.warn('Could not fetch account agents:', err);
+  }
+  return [];
+}
+
+async function handleChatInputForMentions() {
+  const input = elements.chatReplyInput;
+  if (!input || !currentActiveChat || !elements.mentionPicker) return;
+
+  // Only allow mentions in Private Note mode
+  if (!isPrivateNoteMode) {
+    if (elements.mentionPicker) elements.mentionPicker.classList.add('hidden');
+    if (elements.mentionChipsBar) elements.mentionChipsBar.classList.add('hidden');
+    return;
+  }
+
+  updateMentionChipsUI();
+
+  const val = input.value;
+  const cursorIndex = input.selectionStart;
+  const textBeforeCursor = val.slice(0, cursorIndex);
+  
+  const atMatch = textBeforeCursor.match(/@([a-zA-Z0-9_À-ÿ]*)$/);
+  if (atMatch) {
+    const searchTerm = atMatch[1].toLowerCase();
+    const agents = await fetchAccountAgents(currentActiveChat.accountId);
+    if (agents && agents.length > 0) {
+      filteredAgentsList = agents.filter(a => {
+        const name = (a.name || '').toLowerCase();
+        const email = (a.email || '').toLowerCase();
+        return name.includes(searchTerm) || email.includes(searchTerm);
+      });
+
+      if (filteredAgentsList.length > 0) {
+        selectedMentionIndex = 0;
+        renderMentionPicker(filteredAgentsList);
+        elements.mentionPicker.classList.remove('hidden');
+        return;
+      }
+    }
+  }
+
+  elements.mentionPicker.classList.add('hidden');
+}
+
+function handleChatKeydownForMentions(e) {
+  if (!elements.mentionPicker || elements.mentionPicker.classList.contains('hidden')) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    selectedMentionIndex = (selectedMentionIndex + 1) % filteredAgentsList.length;
+    updateSelectedMentionItem();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    selectedMentionIndex = (selectedMentionIndex - 1 + filteredAgentsList.length) % filteredAgentsList.length;
+    updateSelectedMentionItem();
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (filteredAgentsList[selectedMentionIndex]) {
+      e.preventDefault();
+      insertAgentMention(filteredAgentsList[selectedMentionIndex]);
+    }
+  } else if (e.key === 'Escape') {
+    elements.mentionPicker.classList.add('hidden');
+  }
+}
+
+function renderMentionPicker(agents) {
+  if (!elements.mentionPickerList) return;
+
+  elements.mentionPickerList.innerHTML = agents.map((agent, index) => {
+    const initials = (agent.name || 'Agente').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+    const avatarHtml = agent.avatar_url
+      ? `<img src="${agent.avatar_url}" class="mention-avatar" alt="${agent.name}">`
+      : `<div class="mention-avatar">${initials}</div>`;
+
+    return `
+      <div class="mention-picker-item ${index === selectedMentionIndex ? 'selected' : ''}" data-index="${index}">
+        ${avatarHtml}
+        <div class="mention-info">
+          <span class="mention-name">${escapeHtml(agent.name || 'Agente')}</span>
+          <span class="mention-email">${escapeHtml(agent.email || '')}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  elements.mentionPickerList.querySelectorAll('.mention-picker-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const idx = parseInt(item.getAttribute('data-index'), 10);
+      if (filteredAgentsList[idx]) {
+        insertAgentMention(filteredAgentsList[idx]);
+      }
+    });
+  });
+}
+
+function updateSelectedMentionItem() {
+  if (!elements.mentionPickerList) return;
+  const items = elements.mentionPickerList.querySelectorAll('.mention-picker-item');
+  items.forEach((item, index) => {
+    if (index === selectedMentionIndex) {
+      item.classList.add('selected');
+      item.scrollIntoView({ block: 'nearest' });
+    } else {
+      item.classList.remove('selected');
+    }
+  });
+}
+
+let activeMentionedAgents = [];
+
+function insertAgentMention(agent) {
+  const input = elements.chatReplyInput;
+  if (!input) return;
+
+  const val = input.value;
+  const cursorIndex = input.selectionStart;
+  const textBeforeCursor = val.slice(0, cursorIndex);
+  const textAfterCursor = val.slice(cursorIndex);
+
+  const atIndex = textBeforeCursor.lastIndexOf('@');
+  if (atIndex !== -1) {
+    const cleanTag = `@${agent.name} `;
+    const newText = val.slice(0, atIndex) + cleanTag + textAfterCursor;
+    
+    input.value = newText;
+    const newCursorPos = atIndex + cleanTag.length;
+    input.setSelectionRange(newCursorPos, newCursorPos);
+    input.focus();
+
+    if (!activeMentionedAgents.some(a => a.id === agent.id)) {
+      activeMentionedAgents.push(agent);
+    }
+
+    updateMentionChipsUI();
+
+    // Trigger input event to resize textarea
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  elements.mentionPicker.classList.add('hidden');
+}
+
+function updateMentionChipsUI() {
+  if (!elements.mentionChipsBar || !elements.mentionChipsList || !elements.chatReplyInput) return;
+
+  const text = elements.chatReplyInput.value;
+  // Keep only agents whose clean @Name tag is still in text
+  activeMentionedAgents = activeMentionedAgents.filter(agent => text.includes(`@${agent.name}`));
+
+  if (activeMentionedAgents.length === 0) {
+    elements.mentionChipsBar.classList.add('hidden');
+    elements.mentionChipsList.innerHTML = '';
+    return;
+  }
+
+  elements.mentionChipsList.innerHTML = activeMentionedAgents.map(agent => `
+    <span class="mention-chip">
+      @${escapeHtml(agent.name)}
+      <button type="button" class="btn-remove-chip" data-id="${agent.id}" title="Remover marcação">&times;</button>
+    </span>
+  `).join('');
+
+  elements.mentionChipsList.querySelectorAll('.btn-remove-chip').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const agentId = parseInt(btn.getAttribute('data-id'), 10);
+      const targetAgent = activeMentionedAgents.find(a => a.id === agentId);
+      if (targetAgent && elements.chatReplyInput) {
+        elements.chatReplyInput.value = elements.chatReplyInput.value.split(`@${targetAgent.name}`).join('');
+        activeMentionedAgents = activeMentionedAgents.filter(a => a.id !== agentId);
+        updateMentionChipsUI();
+        elements.chatReplyInput.focus();
+      }
+    });
+  });
+
+  elements.mentionChipsBar.classList.remove('hidden');
 }
 
 

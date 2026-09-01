@@ -1556,6 +1556,176 @@ textarea {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* Mention Picker Popover */
+.mention-picker-popover {
+  position: absolute;
+  bottom: 60px;
+  left: 14px;
+  width: 260px;
+  max-height: 220px;
+  background-color: #161e2e;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleIn 0.12s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.mention-picker-header {
+  padding: 6px 12px;
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mention-picker-list {
+  overflow-y: auto;
+  max-height: 180px;
+  padding: 4px 0;
+}
+
+.mention-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: var(--transition);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.mention-picker-item:hover, .mention-picker-item.selected {
+  background-color: var(--bg-tertiary);
+  color: #60a5fa;
+}
+
+.mention-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #3b82f6;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.mention-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mention-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mention-email {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Chat Mention Badge inside Message Bubbles */
+.chat-mention-badge {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  margin: 0 2px;
+}
+
+.chat-msg-bubble.outgoing .chat-mention-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.chat-msg-bubble.private-note .chat-mention-badge {
+  background: rgba(245, 158, 11, 0.25);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+/* Mention Chips Preview Bar above chat input */
+.mention-chips-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  padding: 4px 14px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.mention-chips-title {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 10.5px;
+}
+
+.mention-chips-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mention-chip {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.mention-chip .btn-remove-chip {
+  background: none;
+  border: none;
+  color: #60a5fa;
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.75;
+  line-height: 1;
+}
+
+.mention-chip .btn-remove-chip:hover {
+  opacity: 1;
+  color: #ef4444;
+}
+
 /* Category Tabs */
 .emoji-picker-categories {
   display: flex;
@@ -1751,40 +1921,68 @@ textarea {
   background-color: rgba(245, 158, 11, 0.25) !important;
 }
 
-/* Private Note Mode Active Container */
+/* Private Note Mode Active Textarea Only */
 .chat-reply-container.private-mode {
-  background-color: #272115;
-  border-top-color: #f59e0b;
+  background-color: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  box-shadow: none !important;
+}
+
+.chat-reply-container.private-mode .chat-reply-bar {
+  background-color: var(--bg-secondary);
 }
 
 .chat-reply-container.private-mode textarea {
-  border-color: #f59e0b;
-  background-color: #1e1910;
+  background: linear-gradient(135deg, #ebb150, #e3c38b) !important;
+  border: none !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.chat-reply-container.private-mode textarea:focus {
+  border: none !important;
+  box-shadow: none !important;
 }
 
 .chat-reply-container.private-mode textarea::placeholder {
-  color: #f59e0b;
-  opacity: 0.9;
+  color: rgba(255, 255, 255, 0.95);
+  opacity: 0.95;
 }
 
-/* Private Note Bubble Styling (Warm Yellow Pastel) */
+.chat-reply-container.private-mode #btn-chat-reply-send {
+  background: linear-gradient(135deg, #ebb150, #e3c38b) !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.chat-reply-container.private-mode .btn-toggle-private-note {
+  color: #ffffff;
+}
+
+.chat-reply-container.private-mode .btn-toggle-private-note.active {
+  color: #ffffff;
+  background-color: rgba(0, 0, 0, 0.15) !important;
+  box-shadow: none !important;
+}
+
+/* Private Note Bubble Styling (Warm Gold Gradient, No Box Shadow) */
 .chat-msg-bubble.private-note {
   align-self: flex-end;
-  background: #fef3c7 !important;
-  color: #78350f !important;
+  background: linear-gradient(135deg, #ebb150, #e3c38b) !important;
+  color: #ffffff !important;
   border-top-right-radius: 2px;
-  border: 1px solid #fde68a;
-  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.15);
+  border: none !important;
+  box-shadow: none !important;
   position: relative;
   padding-right: 32px;
 }
 
 .chat-msg-bubble.private-note .chat-msg-text {
-  color: #78350f !important;
+  color: #ffffff !important;
 }
 
 .chat-msg-bubble.private-note .chat-msg-time {
-  color: #b45309 !important;
+  color: rgba(255, 255, 255, 0.85) !important;
 }
 
 .chat-msg-bubble.private-note .private-note-badge {
@@ -1794,12 +1992,12 @@ textarea {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background-color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.25);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #b45309;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .chat-reply-bar textarea {
