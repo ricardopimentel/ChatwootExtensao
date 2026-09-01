@@ -2922,40 +2922,186 @@ async function loadConversations() {
   }
 }
 
+function escapeHtml(str) {
+  if (typeof str !== 'string') return str || '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function highlightSearchTerm(text, query) {
+  if (!text) return '';
+  if (!query) return escapeHtml(text);
+  const safeText = escapeHtml(text);
+  const safeQuery = escapeHtml(query);
+  const regex = new RegExp(`(${safeQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return safeText.replace(regex, '<mark class="search-highlight">$1</mark>');
+}
+
+let searchDebounceTimeout = null;
+let apiSearchResults = [];
+let lastSearchQuery = '';
+
+async function performApiSearch(query) {
+  if (!query || query.length < 2 || !currentAccountId) return [];
+  
+  try {
+    const qEncoded = encodeURIComponent(query);
+    const resultsMap = new Map();
+
+    // 1. Chatwoot Search Conversations Endpoint
+    try {
+      const searchRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/conversations/search?q=${qEncoded}`);
+      const convs = extractConversationsArray(searchRes);
+      convs.forEach(c => {
+        if (c && c.id) resultsMap.set(String(c.id), c);
+      });
+    } catch (e) {}
+
+    // 2. Chatwoot Search Conversations with q param on list
+    try {
+      const listRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/conversations?status=all&q=${qEncoded}`);
+      const convs = extractConversationsArray(listRes);
+      convs.forEach(c => {
+        if (c && c.id) resultsMap.set(String(c.id), c);
+      });
+    } catch (e) {}
+
+    // 3. Chatwoot Search Contacts Endpoint
+    try {
+      const contactsRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/contacts/search?q=${qEncoded}`);
+      const contacts = Array.isArray(contactsRes) ? contactsRes : (contactsRes?.payload || contactsRes?.data || []);
+      if (Array.isArray(contacts) && contacts.length > 0) {
+        for (const contact of contacts.slice(0, 5)) {
+          if (!contact.id) continue;
+          try {
+            const contactConvsRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/contacts/${contact.id}/conversations`);
+            const convs = extractConversationsArray(contactConvsRes);
+            convs.forEach(c => {
+              if (c && c.id) resultsMap.set(String(c.id), c);
+            });
+          } catch (err) {}
+        }
+      }
+    } catch (e) {}
+
+    return Array.from(resultsMap.values());
+  } catch (err) {
+    console.error('Error during API search:', err);
+    return [];
+  }
+}
+
+function normalizeSearchString(str) {
+  if (!str) return '';
+  return String(str)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
 function filterAndRenderConversations() {
   try {
-    const query = elements.chatsSearchInput.value.trim().toLowerCase();
+    const rawQuery = elements.chatsSearchInput ? elements.chatsSearchInput.value : '';
+    const query = rawQuery.trim();
+    const normalizedQuery = normalizeSearchString(query);
     
     // Decide which source array to use based on active filter
     let sourceConversations;
     if (activeChatFilter === 'resolved') {
-      // For resolved: use fetchedConversations (contains resolved ones when that tab is active)
       sourceConversations = fetchedConversations.filter(item => item && item.status === 'resolved');
     } else {
-      // For new/progress: prefer openConversationsCache (always open convs)
-      // Fall back to fetchedConversations if cache is still empty (e.g. first load race condition)
       const openSource = openConversationsCache.length > 0 ? openConversationsCache : fetchedConversations;
       sourceConversations = openSource.filter(item => item && item.status !== 'resolved');
     }
 
-    const filtered = sourceConversations.filter(item => {
-      if (!item) return false;
-      
-      if (!query) return true;
-      const contactName = (item.meta?.sender?.name || '').toLowerCase();
-      const lastMsgContent = (Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1]?.content || '' : '').toLowerCase();
-      return contactName.includes(query) || lastMsgContent.includes(query);
+    if (!normalizedQuery) {
+      apiSearchResults = [];
+      lastSearchQuery = '';
+      sourceConversations.forEach(item => { if (item) delete item._searchMatch; });
+      renderConversationsList(sourceConversations, currentAccountId, '');
+      return;
+    }
+
+    // Merge all available conversation sources for deep search
+    const mergedMap = new Map();
+    [...openConversationsCache, ...fetchedConversations, ...apiSearchResults].forEach(item => {
+      if (item && item.id) {
+        // Respect tab filter unless explicit search match
+        const matchesFilter = activeChatFilter === 'resolved' ? item.status === 'resolved' : item.status !== 'resolved';
+        if (matchesFilter) {
+          mergedMap.set(String(item.id), item);
+        }
+      }
     });
 
-    renderConversationsList(filtered, currentAccountId);
+    const combinedList = Array.from(mergedMap.values());
+
+    // WhatsApp-style Multi-Level Deep Search with Accent Insensitivity
+    const filtered = [];
+    combinedList.forEach(item => {
+      if (!item) return;
+
+      const contactName = normalizeSearchString(item.meta?.sender?.name);
+      const contactPhone = normalizeSearchString(item.meta?.sender?.phone_number);
+      const contactEmail = normalizeSearchString(item.meta?.sender?.email);
+      const channelName = normalizeSearchString(item.inbox?.name || item.meta?.channel);
+      const lastNonActMsg = normalizeSearchString(item.last_non_activity_message?.content);
+
+      const nameMatch = contactName.includes(normalizedQuery);
+      const phoneMatch = contactPhone.includes(normalizedQuery);
+      const emailMatch = contactEmail.includes(normalizedQuery);
+      const channelMatch = channelName.includes(normalizedQuery);
+      const lastMsgMatch = lastNonActMsg.includes(normalizedQuery);
+
+      let matchingMsgContent = null;
+      if (lastMsgMatch && item.last_non_activity_message?.content) {
+        matchingMsgContent = item.last_non_activity_message.content;
+      }
+
+      if (Array.isArray(item.messages)) {
+        for (let i = item.messages.length - 1; i >= 0; i--) {
+          const msg = item.messages[i];
+          if (msg && msg.content) {
+            const normContent = normalizeSearchString(msg.content);
+            if (normContent.includes(normalizedQuery)) {
+              matchingMsgContent = msg.content;
+              break;
+            }
+          }
+        }
+      }
+
+      if (nameMatch || phoneMatch || emailMatch || channelMatch || lastMsgMatch || matchingMsgContent) {
+        const clonedItem = Object.assign({}, item);
+        if (matchingMsgContent) {
+          clonedItem._searchMatch = { type: 'message', content: matchingMsgContent };
+        } else {
+          clonedItem._searchMatch = { type: 'contact' };
+        }
+        filtered.push(clonedItem);
+      }
+    });
+
+    renderConversationsList(filtered, currentAccountId, rawQuery.trim());
+
+    // Trigger API search in background if query changed
+    if (normalizedQuery.length >= 2 && normalizedQuery !== lastSearchQuery) {
+      lastSearchQuery = normalizedQuery;
+      if (searchDebounceTimeout) clearTimeout(searchDebounceTimeout);
+      searchDebounceTimeout = setTimeout(async () => {
+        const apiConvs = await performApiSearch(query);
+        if (apiConvs.length > 0) {
+          apiSearchResults = apiConvs;
+          filterAndRenderConversations();
+        }
+      }, 350);
+    }
   } catch (err) {
     console.error('Error filtering conversations:', err);
-    elements.chatsList.innerHTML = `
-      <div class="empty-state">
-        <h3>Erro ao Renderizar</h3>
-        <p>Ocorreu um erro ao filtrar as conversas: ${err.message}</p>
-      </div>
-    `;
   }
 }
 
@@ -2993,23 +3139,46 @@ function getCurrentlyOpenConversationIds() {
   });
 }
 
-async function renderConversationsList(conversations, accountId) {
+async function renderConversationsList(conversations, accountId, searchQuery = '') {
   try {
     if (!elements.chatsList) return;
+    const safeConversations = (Array.isArray(conversations) ? conversations : []).filter(c => c && c.id);
 
-    if (conversations.length === 0) {
+    // Search results banner
+    let bannerEl = elements.chatsList.parentElement ? elements.chatsList.parentElement.querySelector('.search-results-banner') : null;
+    if (searchQuery) {
+      const bannerHtml = `
+        <div class="search-results-banner">
+          <span>🔍 "${escapeHtml(searchQuery)}"</span>
+          <span>${safeConversations.length} ${safeConversations.length === 1 ? 'conversa' : 'conversas'}</span>
+        </div>
+      `;
+      if (bannerEl) {
+        bannerEl.outerHTML = bannerHtml;
+      } else if (elements.chatsList.parentElement) {
+        elements.chatsList.insertAdjacentHTML('beforebegin', bannerHtml);
+      }
+    } else if (bannerEl) {
+      bannerEl.remove();
+    }
+
+    if (safeConversations.length === 0) {
       elements.chatsList.innerHTML = `
         <div class="empty-state">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-          <h3>Nenhuma Conversa</h3>
-          <p>Não há conversas abertas correspondentes ao filtro atual.</p>
+          <h3>${searchQuery ? 'Nenhum resultado encontrado' : 'Nenhuma Conversa'}</h3>
+          <p>${searchQuery ? `Não foram encontradas conversas ou mensagens contendo "${escapeHtml(searchQuery)}".` : 'Não há conversas abertas correspondentes ao filtro atual.'}</p>
         </div>
       `;
       return;
     }
 
-    const openIds = await getCurrentlyOpenConversationIds();
-    const validIds = new Set(conversations.map(c => String(c.id)));
+    let openIds = new Set();
+    try {
+      openIds = await getCurrentlyOpenConversationIds();
+    } catch (e) {}
+
+    const validIds = new Set(safeConversations.map(c => String(c.id)));
 
     // Clean up loading indicators, empty states, or non-chat-item elements
     Array.from(elements.chatsList.children).forEach(child => {
@@ -3023,11 +3192,11 @@ async function renderConversationsList(conversations, accountId) {
       }
     });
 
-    conversations.forEach(item => {
-      if (!item) return;
+    safeConversations.forEach(item => {
+      if (!item || !item.id) return;
 
       const strId = String(item.id);
-      const isOpenWindow = openIds.has(strId);
+      const isOpenWindow = openIds && openIds.has(strId);
 
       if (isOpenWindow) {
         item.unread_count = 0; // Force 0 unread when open in window
@@ -3039,7 +3208,12 @@ async function renderConversationsList(conversations, accountId) {
       
       const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
       let lastMsgText = 'Nova conversa criada';
-      if (lastMsgObj) {
+      let isMatchSnippet = false;
+
+      if (item._searchMatch && item._searchMatch.type === 'message' && item._searchMatch.content) {
+        lastMsgText = `💬 "${item._searchMatch.content}"`;
+        isMatchSnippet = true;
+      } else if (lastMsgObj) {
         lastMsgText = lastMsgObj.content || 'Nova mensagem (mídia/anexo)';
       }
 
@@ -3059,6 +3233,9 @@ async function renderConversationsList(conversations, accountId) {
         ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
         : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
 
+      const displayNameHtml = searchQuery ? highlightSearchTerm(contactName, searchQuery) : escapeHtml(contactName);
+      const displayMsgHtml = searchQuery ? highlightSearchTerm(lastMsgText, searchQuery) : escapeHtml(lastMsgText);
+
       const existingCard = elements.chatsList.querySelector(`[data-id="${strId}"]`);
 
       if (existingCard) {
@@ -3068,13 +3245,20 @@ async function renderConversationsList(conversations, accountId) {
         }
 
         const nameEl = existingCard.querySelector('.chat-item-name');
-        if (nameEl && nameEl.textContent !== contactName) nameEl.textContent = contactName;
+        if (nameEl) nameEl.innerHTML = displayNameHtml;
 
         const timeEl = existingCard.querySelector('.chat-item-time');
         if (timeEl && timeEl.textContent !== timeStr) timeEl.textContent = timeStr;
 
         const msgEl = existingCard.querySelector('.chat-item-msg');
-        if (msgEl && msgEl.textContent !== lastMsgText) msgEl.textContent = lastMsgText;
+        if (msgEl) {
+          msgEl.innerHTML = displayMsgHtml;
+          if (isMatchSnippet) {
+            msgEl.classList.add('matching-msg');
+          } else {
+            msgEl.classList.remove('matching-msg');
+          }
+        }
 
         const metaEl = existingCard.querySelector('.chat-item-meta');
         if (metaEl) {
@@ -3104,11 +3288,11 @@ async function renderConversationsList(conversations, accountId) {
           <div class="chat-item-avatar">${avatarContent}</div>
           <div class="chat-item-content">
             <div class="chat-item-top">
-              <span class="chat-item-name">${contactName}</span>
+              <span class="chat-item-name">${displayNameHtml}</span>
               <span class="chat-item-time">${timeStr}</span>
             </div>
             <div class="chat-item-bottom">
-              <span class="chat-item-msg">${lastMsgText}</span>
+              <span class="chat-item-msg ${isMatchSnippet ? 'matching-msg' : ''}">${displayMsgHtml}</span>
               <div class="chat-item-meta">
                 <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
                 ${badgeHtml}
@@ -3125,8 +3309,8 @@ async function renderConversationsList(conversations, accountId) {
       }
     });
 
-    updateUnreadBadgeLocal();
-    resolveInboxNames();
+    if (typeof updateUnreadBadgeLocal === 'function') updateUnreadBadgeLocal();
+    if (typeof resolveInboxNames === 'function') resolveInboxNames();
   } catch (err) {
     console.error('Error rendering conversations list:', err);
   }
