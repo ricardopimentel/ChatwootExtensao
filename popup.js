@@ -132,8 +132,11 @@ const elements = {
   settingsToken: document.getElementById('settings-token'),
   btnToggleToken: document.getElementById('btn-toggle-token'),
   settingsCountry: document.getElementById('settings-country'),
+  settingsGeminiKey: document.getElementById('settings-gemini-key'),
+  btnToggleGeminiKey: document.getElementById('btn-toggle-gemini-key'),
   settingsDefaultAccount: document.getElementById('settings-default-account'),
   settingsDefaultInbox: document.getElementById('settings-default-inbox'),
+  btnAiCorrectText: document.getElementById('btn-ai-correct-text'),
   
   // Toast
   toast: document.getElementById('toast'),
@@ -433,6 +436,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnChatResolve = document.getElementById('btn-chat-resolve');
   if (btnChatResolve) {
     btnChatResolve.addEventListener('click', resolveCurrentConversation);
+  }
+
+  // AI Correct Text button listener
+  if (elements.btnAiCorrectText) {
+    elements.btnAiCorrectText.addEventListener('click', correctTextWithGemini);
   }
 
   // Chat reply submit
@@ -797,6 +805,12 @@ async function loadSettings() {
     if (autoTranscriptCheck && config.autoTranscriptEmail !== undefined) {
       autoTranscriptCheck.checked = config.autoTranscriptEmail;
     }
+
+    if (elements.settingsGeminiKey) {
+      elements.settingsGeminiKey.value = config.geminiApiKey || '';
+    }
+
+    updateAiButtonVisibility();
   }
 }
 
@@ -806,6 +820,13 @@ function setupSettingsHandlers() {
     const type = elements.settingsToken.getAttribute('type') === 'password' ? 'text' : 'password';
     elements.settingsToken.setAttribute('type', type);
   });
+
+  if (elements.btnToggleGeminiKey && elements.settingsGeminiKey) {
+    elements.btnToggleGeminiKey.addEventListener('click', () => {
+      const type = elements.settingsGeminiKey.getAttribute('type') === 'password' ? 'text' : 'password';
+      elements.settingsGeminiKey.setAttribute('type', type);
+    });
+  }
 
   // Settings form submit
   elements.settingsForm.addEventListener('submit', async (e) => {
@@ -827,6 +848,12 @@ function setupSettingsHandlers() {
     if (autoTranscriptCheck) {
       config.autoTranscriptEmail = autoTranscriptCheck.checked;
     }
+
+    if (elements.settingsGeminiKey) {
+      config.geminiApiKey = elements.settingsGeminiKey.value.trim();
+    }
+
+    updateAiButtonVisibility();
 
     // Save to cloud storage
     await saveSettingsToStorage(config);
@@ -6304,6 +6331,128 @@ function notifyConversationStatusChanged(conversationId, newStatus) {
     conversationId: conversationId,
     status: newStatus
   }).catch(() => {});
+}
+
+// GOOGLE GEMINI AI TEXT CORRECTION
+function updateAiButtonVisibility() {
+  if (elements.btnAiCorrectText) {
+    if (config && config.geminiApiKey && config.geminiApiKey.trim().length > 0) {
+      elements.btnAiCorrectText.classList.remove('hidden');
+    } else {
+      elements.btnAiCorrectText.classList.add('hidden');
+    }
+  }
+}
+
+async function correctTextWithGemini() {
+  if (!config || !config.geminiApiKey || !config.geminiApiKey.trim()) {
+    showToast('Configure sua Gemini API Key na aba Ajustes.', 'warning');
+    return;
+  }
+
+  const input = elements.chatReplyInput;
+  if (!input) return;
+
+  const rawText = input.value.trim();
+  if (!rawText) {
+    showToast('Digite uma mensagem na caixa antes de corrigir com IA.', 'info');
+    return;
+  }
+
+  const btn = elements.btnAiCorrectText;
+  const originalHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳';
+  }
+
+  try {
+    const apiKey = config.geminiApiKey.trim();
+    const promptText = `Você é um especialista em comunicação e atendimento ao cliente em Português do Brasil (pt-BR).
+
+Sua tarefa é aprimorar o seguinte rascunho de mensagem para torná-lo:
+1. Extremamente claro, organizado e de fácil entendimento.
+2. Com ortografia, gramática e pontuação impecáveis (pt-BR).
+3. Em um tom altamente profissional, empático, cortês e objetivo para atendimento.
+
+Instruções estritas:
+- Mantenha a intenção e sentido original da mensagem.
+- Reorganize a estrutura das frases para garantir máxima clareza se o texto for confuso.
+- Não adicione comentários, saudações/despedidas extras ou aspas.
+- Retorne APENAS o texto aprimorado final.
+
+Rascunho: "${rawText}"`;
+
+    let resData = null;
+    let lastErrMsg = '';
+    const models = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro'
+    ];
+
+    for (const modelName of models) {
+      try {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }]
+          })
+        });
+
+        if (resp.ok) {
+          resData = await resp.json();
+          break;
+        } else {
+          const errBody = await resp.json().catch(() => ({}));
+          const msg = errBody.error?.message || `HTTP ${resp.status}`;
+          lastErrMsg = msg;
+
+          if (resp.status === 503 || resp.status === 429 || msg.includes('high demand') || msg.includes('Quota')) {
+            await new Promise(r => setTimeout(r, 400));
+          }
+        }
+      } catch (e) {
+        lastErrMsg = e.message;
+      }
+    }
+
+    if (!resData) {
+      if (lastErrMsg.includes('high demand') || lastErrMsg.includes('Quota') || lastErrMsg.includes('503')) {
+        showToast('⚠️ A IA do Gemini está com alta demanda temporária. Tente novamente em instantes!', 'warning');
+        return;
+      }
+      throw new Error(lastErrMsg || 'Falha na conexão com a API do Gemini.');
+    }
+
+    const candidateText = resData.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (candidateText && candidateText.trim()) {
+      let correctedText = candidateText.trim();
+      if ((correctedText.startsWith('"') && correctedText.endsWith('"')) || (correctedText.startsWith("'") && correctedText.endsWith("'"))) {
+        correctedText = correctedText.substring(1, correctedText.length - 1).trim();
+      }
+
+      input.value = correctedText;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+      
+      showToast('✨ Texto corrigido com sucesso pela IA!', 'success');
+    } else {
+      throw new Error('A IA não retornou nenhum texto.');
+    }
+  } catch (err) {
+    console.error('[Gemini AI Error]:', err);
+    showToast(`Erro ao corrigir com IA: ${err.message}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
 }
 
 

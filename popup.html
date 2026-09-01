@@ -140,6 +140,11 @@
               </button>
 
               <button type="button" class="btn-format-emoji" id="btn-emoji-toggle" title="Emojis">😀</button>
+
+              <span class="toolbar-divider" style="width: 1px; height: 16px; background-color: var(--border-color); margin: 0 4px;"></span>
+
+              <!-- AI Correct Text Button -->
+              <button type="button" class="btn-ai-correct-text hidden" id="btn-ai-correct-text" title="Corrigir texto com IA (Google Gemini)">✨</button>
             </div>
             
             <!-- Emoji Picker Popover (WhatsApp style) -->
@@ -617,6 +622,19 @@
             <label for="settings-country">Código de País Padrão</label>
             <input type="text" id="settings-country" placeholder="+55" value="+55">
             <span class="helper-text">Será inserido se o número de telefone não tiver código de país.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="settings-gemini-key">Chave de API do Google Gemini (IA)</label>
+            <div class="password-input-wrapper">
+              <input type="password" id="settings-gemini-key" placeholder="Cole sua Gemini API Key (AIzaSy...)">
+              <button type="button" class="btn-toggle-password" id="btn-toggle-gemini-key">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="eye-open"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+            <span class="helper-text">
+              Ativa o botão de aprimoramento por IA nas mensagens. Obtenha gratuitamente no <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--accent-color); text-decoration: underline;">Google AI Studio</a>.
+            </span>
           </div>
 
           <div class="form-row">

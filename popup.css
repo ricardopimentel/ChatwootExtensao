@@ -1497,8 +1497,40 @@ textarea {
 }
 
 .btn-format-emoji {
-  margin-left: auto; /* Push emoji button to the right */
   font-size: 15px;
+}
+
+/* AI Gemini Text Correction Button */
+.btn-ai-correct-text {
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #d946ef 100%);
+  border: none;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+  flex-shrink: 0;
+}
+
+.btn-ai-correct-text:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.65);
+  opacity: 0.95;
+}
+
+.btn-ai-correct-text:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* Premium Emoji Picker Popover */
