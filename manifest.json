@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chatwoot Helper",
-  "version": "2.0.0",
+  "version": "2.5.5",
   "description": "Gerenciador avançado para Chatwoot: lembretes de conversas, envio de mensagens em massa via CSV, janelas flutuantes e relatórios.",
   "minimum_chrome_version": "116",
   "permissions": [

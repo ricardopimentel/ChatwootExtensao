@@ -157,7 +157,8 @@ const elements = {
   chatHeaderMeta: document.getElementById('chat-header-meta'),
   chatMessagesArea: document.getElementById('chat-messages-area'),
   chatReplyBar: document.getElementById('chat-reply-bar'),
-  chatReplyInput: document.getElementById('chat-reply-input')
+  chatReplyInput: document.getElementById('chat-reply-input'),
+  btnTogglePrivateNote: document.getElementById('btn-toggle-private-note')
 };
 
 // INITIALIZATION
@@ -441,6 +442,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // AI Correct Text button listener
   if (elements.btnAiCorrectText) {
     elements.btnAiCorrectText.addEventListener('click', correctTextWithGemini);
+  }
+
+  // Toggle Private Note mode
+  if (elements.btnTogglePrivateNote) {
+    elements.btnTogglePrivateNote.addEventListener('click', togglePrivateNoteMode);
   }
 
   // Chat reply submit
@@ -3836,9 +3842,12 @@ function renderChatMessages(messages, silent, isPrepend = false) {
   } else {
     activeMessages.forEach(msg => {
       const type = msg.message_type;
+      const isPrivateNote = msg.private === true || type === 2 || type === 'private';
       
       let bubbleClass = 'chat-msg-bubble';
-      if (type === 0 || type === 'incoming') {
+      if (isPrivateNote) {
+        bubbleClass += ' private-note';
+      } else if (type === 0 || type === 'incoming') {
         bubbleClass += ' incoming';
       } else if (type === 1 || type === 'outgoing' || type === 3 || type === 'template') {
         bubbleClass += ' outgoing';
@@ -3984,9 +3993,15 @@ function renderChatMessages(messages, silent, isPrepend = false) {
           ? `<img src="${avatarUrl}" class="chat-msg-sender-avatar" title="${senderName}" alt="${senderName}" data-initials="${initials}" />`
           : `<div class="chat-msg-sender-avatar-initials" title="${senderName}">${initials}</div>`;
 
-        if (isOutgoing) {
+        const privateNoteBadge = isPrivateNote ? `
+          <span class="private-note-badge" title="Nota Privada (visível apenas para a equipe)">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          </span>
+        ` : '';
+
+        if (isOutgoing || isPrivateNote) {
           messagesHtml += `
-            <div class="chat-msg-row outgoing">
+            <div class="chat-msg-row outgoing${isPrivateNote ? ' private-row' : ''}">
               <div class="${bubbleClass}${agentColorClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
                 <button type="button" class="btn-msg-menu" title="Opções da mensagem">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -3995,6 +4010,7 @@ function renderChatMessages(messages, silent, isPrepend = false) {
                 ${contentHtml}
                 ${linkPreviewHtml}
                 ${reactionsHtml}
+                ${privateNoteBadge}
                 <span class="chat-msg-time">${timeStr}</span>
               </div>
               ${avatarHtml}
@@ -4296,7 +4312,7 @@ async function sendChatMessage(e) {
     if (pendingAttachments.length > 0) {
       bodyData = new FormData();
       bodyData.append('message_type', 'outgoing');
-      bodyData.append('private', 'false');
+      bodyData.append('private', String(isPrivateNoteMode));
       bodyData.append('content', replyText || ''); // Always append content parameter
       if (replyParentMessageId) {
         bodyData.append('parent_id', replyParentMessageId);
@@ -4309,7 +4325,7 @@ async function sendChatMessage(e) {
       const payload = {
         content: replyText,
         message_type: 'outgoing',
-        private: false
+        private: isPrivateNoteMode
       };
       if (replyParentMessageId) {
         payload.parent_id = replyParentMessageId;
@@ -6475,6 +6491,38 @@ Rascunho: "${rawText}"`;
       btn.disabled = false;
       btn.innerHTML = originalHtml;
     }
+  }
+}
+
+// PRIVATE NOTE MODE TOGGLE
+let isPrivateNoteMode = false;
+
+function togglePrivateNoteMode() {
+  isPrivateNoteMode = !isPrivateNoteMode;
+  const replyContainer = document.querySelector('.chat-reply-container');
+  const btn = elements.btnTogglePrivateNote;
+  const input = elements.chatReplyInput;
+  
+  if (!btn || !input || !replyContainer) return;
+
+  const unlockedIcon = btn.querySelector('.lock-icon-unlocked');
+  const lockedIcon = btn.querySelector('.lock-icon-locked');
+
+  if (isPrivateNoteMode) {
+    replyContainer.classList.add('private-mode');
+    btn.classList.add('active');
+    if (unlockedIcon) unlockedIcon.classList.add('hidden');
+    if (lockedIcon) lockedIcon.classList.remove('hidden');
+    input.placeholder = 'Digite uma nota privada (visível apenas para a equipe)...';
+    btn.title = 'Modo Nota Privada ATIVO (Clique para voltar para mensagem pública)';
+    showToast('🔒 Modo Nota Privada ativado', 'info');
+  } else {
+    replyContainer.classList.remove('private-mode');
+    btn.classList.remove('active');
+    if (unlockedIcon) unlockedIcon.classList.remove('hidden');
+    if (lockedIcon) lockedIcon.classList.add('hidden');
+    input.placeholder = 'Digite uma mensagem...';
+    btn.title = 'Alternar modo Nota Privada (visível apenas para a equipe)';
   }
 }
 
