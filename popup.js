@@ -2662,6 +2662,7 @@ function resolveInboxNames() {
   elementsToResolve.forEach(async (el) => {
     const accId = el.getAttribute('data-acc');
     const inboxId = el.getAttribute('data-inbox');
+    const phone = el.getAttribute('data-phone');
     if (accId && inboxId) {
       el.classList.add('resolved');
       const name = await getInboxName(accId, inboxId);
@@ -3233,7 +3234,9 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
         ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
         : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
 
+      const phoneNumber = item.meta?.sender?.phone_number || item.meta?.sender?.identifier || '';
       const displayNameHtml = searchQuery ? highlightSearchTerm(contactName, searchQuery) : escapeHtml(contactName);
+      const displayPhoneHtml = searchQuery && phoneNumber ? highlightSearchTerm(phoneNumber, searchQuery) : escapeHtml(phoneNumber);
       const displayMsgHtml = searchQuery ? highlightSearchTerm(lastMsgText, searchQuery) : escapeHtml(lastMsgText);
 
       const existingCard = elements.chatsList.querySelector(`[data-id="${strId}"]`);
@@ -3249,6 +3252,19 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
 
         const timeEl = existingCard.querySelector('.chat-item-time');
         if (timeEl && timeEl.textContent !== timeStr) timeEl.textContent = timeStr;
+
+        let phoneEl = existingCard.querySelector('.chat-item-phone');
+        if (phoneNumber) {
+          if (!phoneEl) {
+            phoneEl = document.createElement('div');
+            phoneEl.className = 'chat-item-phone';
+            const topEl = existingCard.querySelector('.chat-item-top');
+            if (topEl) topEl.insertAdjacentElement('afterend', phoneEl);
+          }
+          phoneEl.innerHTML = displayPhoneHtml;
+        } else if (phoneEl) {
+          phoneEl.remove();
+        }
 
         const msgEl = existingCard.querySelector('.chat-item-msg');
         if (msgEl) {
@@ -3291,6 +3307,7 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
               <span class="chat-item-name">${displayNameHtml}</span>
               <span class="chat-item-time">${timeStr}</span>
             </div>
+            ${phoneNumber ? `<div class="chat-item-phone">${displayPhoneHtml}</div>` : ''}
             <div class="chat-item-bottom">
               <span class="chat-item-msg ${isMatchSnippet ? 'matching-msg' : ''}">${displayMsgHtml}</span>
               <div class="chat-item-meta">
@@ -3425,31 +3442,40 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   elements.chatHeaderName.textContent = contactName;
   
   let avatarUrl = '';
-  if (Array.isArray(fetchedConversations)) {
-    const conversation = fetchedConversations.find(c => c && c.id === conversationId);
-    if (conversation) {
-      avatarUrl = conversation.meta?.sender?.avatar_url || '';
-    }
+  let phoneNumber = '';
+  const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
+  if (conversation) {
+    avatarUrl = conversation.meta?.sender?.avatar_url || '';
+    phoneNumber = conversation.meta?.sender?.phone_number || conversation.meta?.sender?.identifier || '';
   }
 
   elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, avatarUrl);
 
-  if (!avatarUrl) {
-    chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`)
-      .then(conv => {
-        if (conv && conv.meta?.sender?.avatar_url && currentActiveChat && currentActiveChat.id === conversationId) {
-          elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, conv.meta.sender.avatar_url);
-        }
-      }).catch(err => console.warn('Could not fetch conversation avatar:', err));
-  }
-
-  elements.chatHeaderMeta.textContent = 'Carregando caixa de entrada...';
+  elements.chatHeaderMeta.textContent = phoneNumber ? `${phoneNumber} • Carregando caixa de entrada...` : 'Carregando caixa de entrada...';
   
   getInboxName(accountId, inboxId).then(inboxName => {
     if (inboxName && currentActiveChat && currentActiveChat.id === conversationId) {
-      elements.chatHeaderMeta.textContent = inboxName;
+      elements.chatHeaderMeta.textContent = phoneNumber ? `${phoneNumber} • ${inboxName}` : inboxName;
     }
   });
+
+  chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`)
+    .then(conv => {
+      if (conv && currentActiveChat && currentActiveChat.id === conversationId) {
+        if (conv.meta?.sender?.avatar_url) {
+          elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, conv.meta.sender.avatar_url);
+        }
+        const fetchedPhone = conv.meta?.sender?.phone_number || conv.meta?.sender?.identifier || '';
+        if (fetchedPhone && fetchedPhone !== phoneNumber) {
+          phoneNumber = fetchedPhone;
+          getInboxName(accountId, inboxId).then(inboxName => {
+            if (inboxName && currentActiveChat && currentActiveChat.id === conversationId) {
+              elements.chatHeaderMeta.textContent = `${phoneNumber} • ${inboxName}`;
+            }
+          });
+        }
+      }
+    }).catch(err => console.warn('Could not fetch conversation details:', err));
 
   // Mark conversation as read in Chatwoot
   chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}/update_last_seen`, {

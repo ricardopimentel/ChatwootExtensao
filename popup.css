@@ -1357,10 +1357,21 @@ textarea {
 }
 
 .chat-header-meta {
-  font-size: 9.5px;
-  color: var(--accent-color);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
   display: block;
+  margin-top: 2px;
+  letter-spacing: 0.01em;
+}
+
+.chat-item-phone {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
   margin-top: 1px;
+  margin-bottom: 2px;
+  letter-spacing: 0.01em;
 }
 
 .chat-messages-area {
