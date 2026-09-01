@@ -5382,18 +5382,41 @@ function setupLightboxHandlers() {
         // Position and show dropdown menu
         const menu = document.getElementById('msg-context-menu');
         if (menu) {
+          menu.classList.remove('hidden');
+          
           const rect = btnMenu.getBoundingClientRect();
-          let top = rect.bottom;
-          let left = rect.left - 90;
+          const menuWidth = menu.offsetWidth || 220;
+          const menuHeight = menu.offsetHeight || 180;
 
-          // Align bounds safely
-          if (left < 10) left = 10;
-          if (left + 120 > window.innerWidth) left = window.innerWidth - 130;
-          if (top + 130 > window.innerHeight) top = rect.top - 120; // Position above if no room below
+          let top = rect.bottom + 4;
+          let left;
+
+          if (isOutgoing) {
+            // Outgoing message (on the right): align menu to the right side of button
+            left = rect.right - menuWidth;
+          } else {
+            // Incoming message (on the left): align menu to the left side of button
+            left = rect.left;
+          }
+
+          // Strict boundary protection against screen edges
+          const padding = 10;
+          if (left + menuWidth > window.innerWidth - padding) {
+            left = window.innerWidth - menuWidth - padding;
+          }
+          if (left < padding) {
+            left = padding;
+          }
+
+          if (top + menuHeight > window.innerHeight - padding) {
+            top = rect.top - menuHeight - 4; // Position above button if no space below
+          }
+          if (top < padding) {
+            top = padding;
+          }
 
           menu.style.top = `${top}px`;
           menu.style.left = `${left}px`;
-          menu.classList.remove('hidden');
         }
         return;
       }
