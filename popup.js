@@ -206,6 +206,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    // Set dynamic manifest version display in footer bar
+    const versionEl = document.getElementById('app-version-display');
+    if (versionEl) {
+      versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
+    }
+
     // Setup tab navigation & event listeners first
     setupTabs();
     setupSettingsHandlers();
@@ -316,10 +322,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           loadSettings().then(() => {
             updateConnectionStatus();
           });
-        }
-        if (changes.activeOpenConversations) {
-          activeOpenConversationsCache = changes.activeOpenConversations.newValue || {};
-          filterAndRenderConversations();
         }
       }
     });
@@ -980,8 +982,10 @@ function setupSettingsHandlers() {
       updateBox.innerHTML = '🔍 Conectando ao repositório GitHub (ricardopimentel/ChatwootExtensao)...';
 
       try {
-        const manifestUrl = 'https://raw.githubusercontent.com/ricardopimentel/ChatwootExtensao/main/manifest.json';
-        const res = await fetch(manifestUrl, { cache: 'no-store' });
+        let res = await fetch('https://raw.githubusercontent.com/ricardopimentel/ChatwootExtensao/master/manifest.json', { cache: 'no-store' });
+        if (!res.ok) {
+          res = await fetch('https://raw.githubusercontent.com/ricardopimentel/ChatwootExtensao/main/manifest.json', { cache: 'no-store' });
+        }
         
         if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
         
@@ -1008,7 +1012,7 @@ function setupSettingsHandlers() {
           updateBox.innerHTML = `
             🚀 <strong>Nova versão disponível: v${remoteVersion}</strong> (Sua versão atual: v${localVersion})<br>
             <span style="font-size: 10px; color: var(--text-primary);">Baixe o arquivo ZIP da versão mais recente no GitHub para atualizar:</span><br>
-            <a href="https://github.com/ricardopimentel/ChatwootExtensao/archive/refs/heads/main.zip" target="_blank" class="btn btn-primary btn-small" style="display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; text-decoration: none; padding: 4px 10px; font-size: 11px;">
+            <a href="https://github.com/ricardopimentel/ChatwootExtensao/archive/refs/heads/master.zip" target="_blank" class="btn btn-primary btn-small" style="display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; text-decoration: none; padding: 4px 10px; font-size: 11px;">
               📥 Baixar ZIP da Atualização (v${remoteVersion})
             </a>
           `;
@@ -2999,7 +3003,7 @@ function getCurrentlyOpenConversationIds() {
 
 async function renderConversationsList(conversations, accountId) {
   try {
-    elements.chatsList.innerHTML = '';
+    if (!elements.chatsList) return;
 
     if (conversations.length === 0) {
       elements.chatsList.innerHTML = `
@@ -3013,12 +3017,25 @@ async function renderConversationsList(conversations, accountId) {
     }
 
     const openIds = await getCurrentlyOpenConversationIds();
+    const validIds = new Set(conversations.map(c => String(c.id)));
+
+    // Clean up loading indicators, empty states, or non-chat-item elements
+    Array.from(elements.chatsList.children).forEach(child => {
+      if (!child.classList.contains('chat-item')) {
+        child.remove();
+      } else {
+        const cardId = child.getAttribute('data-id');
+        if (cardId && !validIds.has(cardId)) {
+          child.remove();
+        }
+      }
+    });
 
     conversations.forEach(item => {
       if (!item) return;
 
-      // Real-time Chrome tab check: is a window for this conversation ID open in Chrome right now?
-      const isOpenWindow = openIds.has(String(item.id));
+      const strId = String(item.id);
+      const isOpenWindow = openIds.has(strId);
 
       if (isOpenWindow) {
         item.unread_count = 0; // Force 0 unread when open in window
@@ -3046,48 +3063,80 @@ async function renderConversationsList(conversations, accountId) {
         itemClass += ' unread';
       }
 
-      const card = document.createElement('div');
-      card.className = itemClass;
-      card.setAttribute('data-id', item.id);
-      
       const badgeHtml = isOpenWindow 
         ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
         : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
 
-      card.innerHTML = `
-        <div class="chat-item-avatar">${avatarContent}</div>
-        <div class="chat-item-content">
-          <div class="chat-item-top">
-            <span class="chat-item-name">${contactName}</span>
-            <span class="chat-item-time">${timeStr}</span>
-          </div>
-          <div class="chat-item-bottom">
-            <span class="chat-item-msg">${lastMsgText}</span>
-            <div class="chat-item-meta">
-              <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
-              ${badgeHtml}
+      const existingCard = elements.chatsList.querySelector(`[data-id="${strId}"]`);
+
+      if (existingCard) {
+        // SMOOTH IN-PLACE DOM RECONCILIATION (NO FLICKER)
+        if (existingCard.className !== itemClass) {
+          existingCard.className = itemClass;
+        }
+
+        const nameEl = existingCard.querySelector('.chat-item-name');
+        if (nameEl && nameEl.textContent !== contactName) nameEl.textContent = contactName;
+
+        const timeEl = existingCard.querySelector('.chat-item-time');
+        if (timeEl && timeEl.textContent !== timeStr) timeEl.textContent = timeStr;
+
+        const msgEl = existingCard.querySelector('.chat-item-msg');
+        if (msgEl && msgEl.textContent !== lastMsgText) msgEl.textContent = lastMsgText;
+
+        const metaEl = existingCard.querySelector('.chat-item-meta');
+        if (metaEl) {
+          const oldBadge = metaEl.querySelector('.chat-item-open-tag, .chat-item-badge');
+          const tempContainer = document.createElement('div');
+          tempContainer.innerHTML = badgeHtml;
+          const newBadge = tempContainer.firstElementChild;
+
+          if (oldBadge) {
+            if (newBadge) {
+              if (oldBadge.outerHTML !== newBadge.outerHTML) {
+                oldBadge.replaceWith(newBadge);
+              }
+            } else {
+              oldBadge.remove();
+            }
+          } else if (newBadge) {
+            metaEl.appendChild(newBadge);
+          }
+        }
+      } else {
+        // Create new card if not existing
+        const card = document.createElement('div');
+        card.className = itemClass;
+        card.setAttribute('data-id', strId);
+        card.innerHTML = `
+          <div class="chat-item-avatar">${avatarContent}</div>
+          <div class="chat-item-content">
+            <div class="chat-item-top">
+              <span class="chat-item-name">${contactName}</span>
+              <span class="chat-item-time">${timeStr}</span>
+            </div>
+            <div class="chat-item-bottom">
+              <span class="chat-item-msg">${lastMsgText}</span>
+              <div class="chat-item-meta">
+                <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
+                ${badgeHtml}
+              </div>
             </div>
           </div>
-        </div>
-      `;
+        `;
 
-      card.addEventListener('click', () => {
-        openConversationInWindow(item.id, contactName, accountId, item.inbox_id);
-      });
+        card.addEventListener('click', () => {
+          openConversationInWindow(item.id, contactName, accountId, item.inbox_id);
+        });
 
-      elements.chatsList.appendChild(card);
+        elements.chatsList.appendChild(card);
+      }
     });
 
     updateUnreadBadgeLocal();
     resolveInboxNames();
   } catch (err) {
     console.error('Error rendering conversations list:', err);
-    elements.chatsList.innerHTML = `
-      <div class="empty-state">
-        <h3>Erro ao Renderizar</h3>
-        <p>Ocorreu um erro ao construir a lista de conversas: ${err.message}</p>
-      </div>
-    `;
   }
 }
 

@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Chatwoot Helper",
   "version": "1.0.0",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApc0nQFhSW7Sc0V8fDIohPWXDSRYW6ZsUPQsaV8bvbQ7Hshh1qgM2ymGYUmh9yB+KhCv0W/k8SU8yrRBacT48UdM6eAKmY4Nt5Lbxs1HTLI341knnAjNXlW7AoVOjn+4tYDLIXu0oOKY0GlHl4NGK2f6Uftse/cTmPvW+DveRM8RQ3GlntnbkDxdmQpj9GFae3Gzwj7osDh0V6iZZtB+WG1Vj2NHdLq9bjTUoKw2Ytb0Nh9a3i40QKoSmtskjPB5v7QjOhaPQ8xvBMVmWRm+h2qFjIa5ExRBjeMTsy/gssErxsja4rO2KVavWhAmLrlUxFioJwVOR6Eq4lWLSUiwzRQIDAQAB",
-  "description": "Salva lembretes de conversas e inicia chats por telefone diretamente no Chatwoot.",
+  "description": "Gerenciador avançado para Chatwoot: lembretes de conversas, envio de mensagens em massa via CSV, janelas flutuantes e relatórios.",
+  "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "tabs",
@@ -12,15 +12,15 @@
     "alarms",
     "downloads"
   ],
-  "minimum_chrome_version": "116",
-  "background": {
-    "service_worker": "background.js"
-  },
   "host_permissions": [
     "*://*/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
+    "default_title": "Chatwoot Helper",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
