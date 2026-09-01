@@ -792,6 +792,11 @@ async function loadSettings() {
     } catch (err) {
       console.warn('Could not populate accounts/inboxes on loadSettings:', err);
     }
+
+    const autoTranscriptCheck = document.getElementById('settings-auto-transcript-email');
+    if (autoTranscriptCheck && config.autoTranscriptEmail !== undefined) {
+      autoTranscriptCheck.checked = config.autoTranscriptEmail;
+    }
   }
 }
 
@@ -817,6 +822,11 @@ function setupSettingsHandlers() {
     config.defaultCountryCode = elements.settingsCountry.value.trim() || '+55';
     config.defaultAccount = elements.settingsDefaultAccount.value;
     config.defaultInbox = elements.settingsDefaultInbox.value;
+    
+    const autoTranscriptCheck = document.getElementById('settings-auto-transcript-email');
+    if (autoTranscriptCheck) {
+      config.autoTranscriptEmail = autoTranscriptCheck.checked;
+    }
 
     // Save to cloud storage
     await saveSettingsToStorage(config);
@@ -4118,6 +4128,33 @@ async function resolveCurrentConversation() {
 
     showToast(`Conversa ${isResolved ? 'reaberta' : 'finalizada'} com sucesso!`, 'success');
     notifyConversationStatusChanged(conversationId, newStatus);
+    
+    if (newStatus === 'resolved') {
+      const autoTranscriptCheck = document.getElementById('settings-auto-transcript-email');
+      const shouldSend = autoTranscriptCheck ? autoTranscriptCheck.checked : (config.autoTranscriptEmail !== false);
+      if (shouldSend) {
+        try {
+          let agentEmail = config.agentEmail;
+          if (!agentEmail) {
+            const profile = await chatwootFetch('/api/v1/profile');
+            if (profile && profile.email) {
+              agentEmail = profile.email;
+              config.agentEmail = agentEmail;
+              saveSettingsToStorage(config);
+            }
+          }
+          if (agentEmail) {
+            await chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}/transcript`, {
+              method: 'POST',
+              body: JSON.stringify({ email: agentEmail })
+            });
+            showToast(`✉️ Transcrição enviada para ${agentEmail}!`, 'success');
+          }
+        } catch (tErr) {
+          console.warn('Could not send transcript email:', tErr.message);
+        }
+      }
+    }
     
     if (isChatWindowMode) {
       if (newStatus === 'resolved') {

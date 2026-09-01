@@ -159,6 +159,34 @@ async function fetchProfile(baseUrl, token) {
   return response.json();
 }
 
+async function chatwootFetch(endpoint, options = {}) {
+  const savedConfig = await getSettingsFromStorage();
+  if (!savedConfig || !savedConfig.url || !savedConfig.token) {
+    throw new Error('Chatwoot URL ou Token de API não configurados.');
+  }
+
+  const url = `${savedConfig.url}${endpoint}`;
+  const headers = {
+    'api_access_token': savedConfig.token,
+    ...(options.headers || {})
+  };
+
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
 function connectWebSocket() {
   if (!config || !config.url) return;
 

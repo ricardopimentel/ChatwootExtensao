@@ -634,8 +634,16 @@
             </div>
           </div>
 
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary" id="btn-save-settings">
+          <div class="form-group" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-color);">
+            <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; color: var(--text-primary); margin-bottom: 4px;">
+              <input type="checkbox" id="settings-auto-transcript-email" checked style="width: 16px; height: 16px; accent-color: var(--primary-color);">
+              Enviar transcrição por e-mail ao concluir conversa
+            </label>
+            <span class="helper-text" style="margin-top: 4px; display: block;">Envia a cópia completa do atendimento em e-mail formatado para o agente responsável ao finalizar a conversa.</span>
+          </div>
+
+          <div class="form-actions" style="margin-top: 16px;">
+            <button type="submit" class="btn btn-primary" id="btn-save-settings" style="width: 100%;">
               Salvar Configurações
             </button>
           </div>
