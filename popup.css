@@ -1921,7 +1921,7 @@ textarea {
   background-color: rgba(245, 158, 11, 0.25) !important;
 }
 
-/* Private Note Mode Active Textarea Only */
+/* Private Note Mode Active Textarea Only Border */
 .chat-reply-container.private-mode {
   background-color: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
@@ -1933,48 +1933,61 @@ textarea {
 }
 
 .chat-reply-container.private-mode textarea {
-  background: linear-gradient(135deg, #ebb150, #e3c38b) !important;
-  border: none !important;
-  color: #ffffff !important;
+  border: 1px solid #9b783d !important;
+  color: var(--text-primary) !important;
   box-shadow: none !important;
 }
 
 .chat-reply-container.private-mode textarea:focus {
-  border: none !important;
-  box-shadow: none !important;
+  border: 1px solid #9b783d !important;
+  box-shadow: 0 0 0 2px rgba(155, 120, 61, 0.3) !important;
 }
 
 .chat-reply-container.private-mode textarea::placeholder {
-  color: rgba(255, 255, 255, 0.95);
+  color: #9b783d;
   opacity: 0.95;
 }
 
 .chat-reply-container.private-mode #btn-chat-reply-send {
-  background: linear-gradient(135deg, #ebb150, #e3c38b) !important;
+  background: var(--primary-gradient) !important;
   box-shadow: none !important;
   border: none !important;
 }
 
 .chat-reply-container.private-mode .btn-toggle-private-note {
-  color: #ffffff;
+  color: #9b783d;
 }
 
 .chat-reply-container.private-mode .btn-toggle-private-note.active {
-  color: #ffffff;
-  background-color: rgba(0, 0, 0, 0.15) !important;
+  color: #9b783d;
+  background-color: rgba(155, 120, 61, 0.2) !important;
   box-shadow: none !important;
 }
 
-/* Private Note Bubble Styling (Warm Gold Gradient, No Box Shadow) */
+/* Private Note Bubble Styling */
 .chat-msg-bubble.private-note {
-  align-self: flex-end;
-  background: linear-gradient(135deg, #ebb150, #e3c38b) !important;
+    align-self: flex-end;
+    background: linear-gradient(135deg, #71694e, #474337) !important;
+    color: #ffffff !important;
+    border-top-right-radius: 2px;
+    border: none !important;
+    box-shadow: none !important;
+    position: relative;
+    padding-right: 32px;
+}
+
+.chat-msg-bubble.private-note .chat-msg-text {
   color: #ffffff !important;
-  border-top-right-radius: 2px;
-  border: none !important;
-  box-shadow: none !important;
-  position: relative;
-  padding-right: 32px;
+}
+
+.chat-msg-bubble.private-note .chat-msg-time {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.chat-msg-bubble.private-note .chat-mention-badge {
+    background: #9b783d;
+    color: #161e2e;
+    border-color: rgb(0 0 0 / 40%);
 }
 
 .chat-msg-bubble.private-note .chat-msg-text {
