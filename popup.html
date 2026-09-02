@@ -743,10 +743,21 @@
 
     <!-- Media Lightbox Modal -->
     <div class="lightbox-modal hidden" id="lightbox-modal">
-      <button class="btn-lightbox-close" id="btn-lightbox-close" title="Fechar">
+      <button class="btn-lightbox-close" id="btn-lightbox-close" title="Fechar (Esc)">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
       </button>
       
+      <!-- WhatsApp-style Navigation Arrows -->
+      <button class="btn-lightbox-nav btn-lightbox-prev hidden" id="btn-lightbox-prev" title="Mídia anterior (Seta esquerda)">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      </button>
+
+      <button class="btn-lightbox-nav btn-lightbox-next hidden" id="btn-lightbox-next" title="Próxima mídia (Seta direita)">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+      </button>
+
+      <div class="lightbox-counter hidden" id="lightbox-counter">1 de 1</div>
+
       <div class="lightbox-content" id="lightbox-content"></div>
       
       <div class="lightbox-footer">

@@ -2365,6 +2365,56 @@ textarea {
   transform: scale(1.05);
 }
 
+/* Lightbox Navigation Arrows (WhatsApp Style) */
+.btn-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 4010;
+  transition: all 0.18s ease;
+  backdrop-filter: blur(4px);
+}
+
+.btn-lightbox-nav:hover {
+  background: rgba(255, 255, 255, 0.35);
+  border-color: rgba(255, 255, 255, 0.6);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.btn-lightbox-prev {
+  left: 18px;
+}
+
+.btn-lightbox-next {
+  right: 18px;
+}
+
+/* Lightbox Media Counter */
+.lightbox-counter {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  z-index: 4010;
+  backdrop-filter: blur(4px);
+}
+
 .lightbox-content {
   flex: 1;
   display: flex;

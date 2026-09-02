@@ -5399,25 +5399,62 @@ window.toggleAudioSpeed = function(btn) {
 
 // Lightbox Modal for fullscreen previews and file downloads
 let currentLightboxItem = null;
+let currentLightboxGallery = [];
+let currentLightboxIndex = 0;
 
-window.openLightbox = function(url, fileType, filename) {
+function collectActiveConversationMedia() {
+  const mediaList = [];
+  const container = elements.chatMessagesArea || document.getElementById('chat-messages-area');
+  if (!container) return mediaList;
+
+  const nodes = container.querySelectorAll('.chat-img-preview, .btn-video-fullscreen, .chat-file-download-link');
+  nodes.forEach(el => {
+    if (el.classList.contains('chat-img-preview')) {
+      const url = el.getAttribute('src');
+      const filename = el.getAttribute('data-filename') || 'imagem.png';
+      if (url) mediaList.push({ url, fileType: 'image', filename });
+    } else if (el.classList.contains('btn-video-fullscreen')) {
+      const url = el.getAttribute('data-url');
+      const filename = el.getAttribute('data-filename') || 'video.mp4';
+      if (url) mediaList.push({ url, fileType: 'video', filename });
+    } else if (el.classList.contains('chat-file-download-link')) {
+      const url = el.getAttribute('data-url');
+      const filename = el.getAttribute('data-filename') || 'documento';
+      if (url) mediaList.push({ url, fileType: 'file', filename });
+    }
+  });
+
+  return mediaList;
+}
+
+function renderLightboxMediaAtIndex(index) {
   const modal = document.getElementById('lightbox-modal');
   const content = document.getElementById('lightbox-content');
   const filenameDisplay = document.getElementById('lightbox-filename');
+  const counterDisplay = document.getElementById('lightbox-counter');
+  const btnPrev = document.getElementById('btn-lightbox-prev');
+  const btnNext = document.getElementById('btn-lightbox-next');
 
   if (!modal || !content || !filenameDisplay) return;
+  if (index < 0 || index >= currentLightboxGallery.length) return;
 
-  currentLightboxItem = { url, filename };
-  filenameDisplay.textContent = filename;
+  currentLightboxIndex = index;
+  const item = currentLightboxGallery[index];
+  currentLightboxItem = item;
+  filenameDisplay.textContent = item.filename;
+
+  const oldVideo = content.querySelector('video');
+  if (oldVideo) oldVideo.pause();
+
   content.innerHTML = '';
 
-  if (fileType === 'image') {
+  if (item.fileType === 'image') {
     const img = document.createElement('img');
-    img.src = url;
+    img.src = item.url;
     content.appendChild(img);
-  } else if (fileType === 'video') {
+  } else if (item.fileType === 'video') {
     const video = document.createElement('video');
-    video.src = url;
+    video.src = item.url;
     video.controls = true;
     video.autoplay = true;
     content.appendChild(video);
@@ -5426,19 +5463,55 @@ window.openLightbox = function(url, fileType, filename) {
     docDiv.className = 'document-preview';
     docDiv.innerHTML = `
       <div class="document-icon">📄</div>
-      <div style="font-size: 14px; margin-top: 8px; color: var(--text-primary); font-weight: 500; text-align: center; word-break: break-all; padding: 0 20px;">${filename}</div>
+      <div style="font-size: 14px; margin-top: 8px; color: var(--text-primary); font-weight: 500; text-align: center; word-break: break-all; padding: 0 20px;">${item.filename}</div>
       <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Este documento pode ser baixado clicando no botão abaixo.</div>
     `;
     content.appendChild(docDiv);
   }
 
+  const total = currentLightboxGallery.length;
+  if (total > 1) {
+    if (counterDisplay) {
+      counterDisplay.textContent = `${index + 1} de ${total}`;
+      counterDisplay.classList.remove('hidden');
+    }
+    if (btnPrev) {
+      if (index > 0) btnPrev.classList.remove('hidden');
+      else btnPrev.classList.add('hidden');
+    }
+    if (btnNext) {
+      if (index < total - 1) btnNext.classList.remove('hidden');
+      else btnNext.classList.add('hidden');
+    }
+  } else {
+    if (counterDisplay) counterDisplay.classList.add('hidden');
+    if (btnPrev) btnPrev.classList.add('hidden');
+    if (btnNext) btnNext.classList.add('hidden');
+  }
+
   modal.classList.remove('hidden');
+}
+
+window.openLightbox = function(url, fileType, filename) {
+  const mediaList = collectActiveConversationMedia();
+  let foundIndex = mediaList.findIndex(m => m.url === url);
+
+  if (foundIndex !== -1) {
+    currentLightboxGallery = mediaList;
+  } else {
+    currentLightboxGallery = [{ url, fileType, filename }];
+    foundIndex = 0;
+  }
+
+  renderLightboxMediaAtIndex(foundIndex);
 };
 
 function setupLightboxHandlers() {
   const modal = document.getElementById('lightbox-modal');
   const closeBtn = document.getElementById('btn-lightbox-close');
   const downloadBtn = document.getElementById('btn-lightbox-download');
+  const btnPrev = document.getElementById('btn-lightbox-prev');
+  const btnNext = document.getElementById('btn-lightbox-next');
 
   if (!modal || !closeBtn || !downloadBtn) return;
 
@@ -5449,6 +5522,48 @@ function setupLightboxHandlers() {
 
     modal.classList.add('hidden');
     currentLightboxItem = null;
+  });
+
+  if (btnPrev) {
+    btnPrev.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (currentLightboxIndex > 0) {
+        renderLightboxMediaAtIndex(currentLightboxIndex - 1);
+      }
+    });
+  }
+
+  if (btnNext) {
+    btnNext.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (currentLightboxIndex < currentLightboxGallery.length - 1) {
+        renderLightboxMediaAtIndex(currentLightboxIndex + 1);
+      }
+    });
+  }
+
+  // Keyboard Navigation for Lightbox (Seta esquerda, Seta direita, Esc)
+  document.addEventListener('keydown', (e) => {
+    const modalEl = document.getElementById('lightbox-modal');
+    if (!modalEl || modalEl.classList.contains('hidden')) return;
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (currentLightboxIndex > 0) {
+        renderLightboxMediaAtIndex(currentLightboxIndex - 1);
+      }
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (currentLightboxIndex < currentLightboxGallery.length - 1) {
+        renderLightboxMediaAtIndex(currentLightboxIndex + 1);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      const video = modalEl.querySelector('video');
+      if (video) video.pause();
+      modalEl.classList.add('hidden');
+      currentLightboxItem = null;
+    }
   });
 
   downloadBtn.addEventListener('click', (e) => {
@@ -5464,7 +5579,6 @@ function setupLightboxHandlers() {
     }, (downloadId) => {
       if (chrome.runtime.lastError) {
         console.error('Download error using chrome.downloads:', chrome.runtime.lastError);
-        // Fallback to iframe/new tab download
         const a = document.createElement('a');
         a.href = currentLightboxItem.url;
         a.download = currentLightboxItem.filename;
