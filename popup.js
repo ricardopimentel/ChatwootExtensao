@@ -32,6 +32,7 @@ let hasOlderMessages = false;
 let isLoadingOlderMessages = false;
 let lastRenderedRawHtml = '';
 let currentUserId = null;
+var isLightboxHandlersSetup = false;
 
 // Attachments & Voice Recording state
 let pendingAttachments = [];
@@ -5402,25 +5403,52 @@ let currentLightboxItem = null;
 let currentLightboxGallery = [];
 let currentLightboxIndex = 0;
 
+function normalizeMediaUrl(url) {
+  if (!url) return '';
+  let fullUrl = url.trim();
+  if (!fullUrl.startsWith('http') && !fullUrl.startsWith('data:') && !fullUrl.startsWith('blob:')) {
+    const baseUrl = (config.url || '').endsWith('/') ? config.url.slice(0, -1) : (config.url || '');
+    const relativeUrl = fullUrl.startsWith('/') ? fullUrl : '/' + fullUrl;
+    fullUrl = baseUrl + relativeUrl;
+  }
+  return fullUrl;
+}
+
 function collectActiveConversationMedia() {
   const mediaList = [];
   const container = elements.chatMessagesArea || document.getElementById('chat-messages-area');
   if (!container) return mediaList;
 
-  const nodes = container.querySelectorAll('.chat-img-preview, .btn-video-fullscreen, .chat-file-download-link');
+  const seenUrls = new Set();
+  const nodes = container.querySelectorAll('.chat-img-preview, .chat-video-preview, .btn-video-fullscreen, .chat-file-download-link');
+
   nodes.forEach(el => {
+    if (el.closest('.chat-msg-sender-avatar, .chat-header-avatar, .contact-modal-avatar, .mention-avatar, .chat-item-avatar')) {
+      return;
+    }
+
+    let rawUrl = '';
+    let fileType = '';
+    let filename = '';
+
     if (el.classList.contains('chat-img-preview')) {
-      const url = el.getAttribute('src');
-      const filename = el.getAttribute('data-filename') || 'imagem.png';
-      if (url) mediaList.push({ url, fileType: 'image', filename });
-    } else if (el.classList.contains('btn-video-fullscreen')) {
-      const url = el.getAttribute('data-url');
-      const filename = el.getAttribute('data-filename') || 'video.mp4';
-      if (url) mediaList.push({ url, fileType: 'video', filename });
+      rawUrl = el.getAttribute('src');
+      fileType = 'image';
+      filename = el.getAttribute('data-filename') || (rawUrl ? rawUrl.split('/').pop().split('?')[0] : 'imagem.png');
+    } else if (el.classList.contains('chat-video-preview') || el.classList.contains('btn-video-fullscreen')) {
+      rawUrl = el.getAttribute('data-url') || el.getAttribute('src');
+      fileType = 'video';
+      filename = el.getAttribute('data-filename') || (rawUrl ? rawUrl.split('/').pop().split('?')[0] : 'video.mp4');
     } else if (el.classList.contains('chat-file-download-link')) {
-      const url = el.getAttribute('data-url');
-      const filename = el.getAttribute('data-filename') || 'documento';
-      if (url) mediaList.push({ url, fileType: 'file', filename });
+      rawUrl = el.getAttribute('data-url');
+      fileType = 'file';
+      filename = el.getAttribute('data-filename') || 'documento';
+    }
+
+    const normUrl = normalizeMediaUrl(rawUrl);
+    if (normUrl && !seenUrls.has(normUrl)) {
+      seenUrls.add(normUrl);
+      mediaList.push({ url: normUrl, fileType, filename });
     }
   });
 
@@ -5445,6 +5473,8 @@ function renderLightboxMediaAtIndex(index) {
 
   const oldVideo = content.querySelector('video');
   if (oldVideo) oldVideo.pause();
+  const oldAudio = content.querySelector('audio');
+  if (oldAudio) oldAudio.pause();
 
   content.innerHTML = '';
 
@@ -5458,12 +5488,21 @@ function renderLightboxMediaAtIndex(index) {
     video.controls = true;
     video.autoplay = true;
     content.appendChild(video);
+  } else if (item.fileType === 'audio' || /\.(oga|ogg|mp3|wav|m4a|aac)$/i.test(item.filename)) {
+    const audioContainer = document.createElement('div');
+    audioContainer.style.cssText = 'display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; width: 100%; padding: 20px; box-sizing: border-box;';
+    audioContainer.innerHTML = `
+      <div style="font-size: 52px; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));">🎵</div>
+      <div style="font-size: 14px; color: var(--text-primary); font-weight: 600; text-align: center; word-break: break-all; padding: 0 10px;">${escapeHtml(item.filename)}</div>
+      <audio src="${item.url}" controls autoplay style="width: 100%; max-width: 360px; border-radius: 20px; outline: none; margin-top: 10px;"></audio>
+    `;
+    content.appendChild(audioContainer);
   } else {
     const docDiv = document.createElement('div');
     docDiv.className = 'document-preview';
     docDiv.innerHTML = `
       <div class="document-icon">📄</div>
-      <div style="font-size: 14px; margin-top: 8px; color: var(--text-primary); font-weight: 500; text-align: center; word-break: break-all; padding: 0 20px;">${item.filename}</div>
+      <div style="font-size: 14px; margin-top: 8px; color: var(--text-primary); font-weight: 500; text-align: center; word-break: break-all; padding: 0 20px;">${escapeHtml(item.filename)}</div>
       <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Este documento pode ser baixado clicando no botão abaixo.</div>
     `;
     content.appendChild(docDiv);
@@ -5492,21 +5531,49 @@ function renderLightboxMediaAtIndex(index) {
   modal.classList.remove('hidden');
 }
 
-window.openLightbox = function(url, fileType, filename) {
-  const mediaList = collectActiveConversationMedia();
-  let foundIndex = mediaList.findIndex(m => m.url === url);
+window.openLightbox = function(url, fileType, filename, galleryOverride) {
+  const targetUrl = normalizeMediaUrl(url);
+  let mediaList = [];
+
+  if (Array.isArray(galleryOverride) && galleryOverride.length > 0) {
+    mediaList = galleryOverride.map(m => {
+      const fname = m.filename || m.file_name || 'arquivo';
+      const isAudio = /\.(oga|ogg|mp3|wav|m4a|aac)$/i.test(fname);
+      return {
+        url: normalizeMediaUrl(m.url || m.data_url || m.src),
+        fileType: m.fileType || m.type || (isAudio ? 'audio' : 'image'),
+        filename: fname
+      };
+    });
+  }
+
+  if (mediaList.length === 0) {
+    mediaList = collectActiveConversationMedia();
+  }
+
+  let foundIndex = mediaList.findIndex(m => {
+    const mUrl = normalizeMediaUrl(m.url);
+    return mUrl === targetUrl || mUrl.endsWith(targetUrl) || targetUrl.endsWith(mUrl);
+  });
 
   if (foundIndex !== -1) {
     currentLightboxGallery = mediaList;
   } else {
-    currentLightboxGallery = [{ url, fileType, filename }];
-    foundIndex = 0;
+    currentLightboxGallery = mediaList.length > 0 ? mediaList : [{ url: targetUrl, fileType, filename }];
+    foundIndex = currentLightboxGallery.findIndex(m => m.url.includes(targetUrl) || targetUrl.includes(m.url));
+    if (foundIndex === -1) {
+      currentLightboxGallery.push({ url: targetUrl, fileType, filename });
+      foundIndex = currentLightboxGallery.length - 1;
+    }
   }
 
   renderLightboxMediaAtIndex(foundIndex);
 };
 
 function setupLightboxHandlers() {
+  if (isLightboxHandlersSetup) return;
+  isLightboxHandlersSetup = true;
+
   const modal = document.getElementById('lightbox-modal');
   const closeBtn = document.getElementById('btn-lightbox-close');
   const downloadBtn = document.getElementById('btn-lightbox-download');
@@ -5515,32 +5582,45 @@ function setupLightboxHandlers() {
 
   if (!modal || !closeBtn || !downloadBtn) return;
 
-  closeBtn.addEventListener('click', (e) => {
+  closeBtn.onclick = (e) => {
     e.preventDefault();
+    e.stopPropagation();
     const video = modal.querySelector('video');
     if (video) video.pause();
+    const audio = modal.querySelector('audio');
+    if (audio) audio.pause();
 
     modal.classList.add('hidden');
     currentLightboxItem = null;
-  });
+  };
 
   if (btnPrev) {
-    btnPrev.addEventListener('click', (e) => {
+    btnPrev.onclick = (e) => {
+      e.preventDefault();
       e.stopPropagation();
       if (currentLightboxIndex > 0) {
         renderLightboxMediaAtIndex(currentLightboxIndex - 1);
       }
-    });
+    };
   }
 
   if (btnNext) {
-    btnNext.addEventListener('click', (e) => {
+    btnNext.onclick = (e) => {
+      e.preventDefault();
       e.stopPropagation();
       if (currentLightboxIndex < currentLightboxGallery.length - 1) {
         renderLightboxMediaAtIndex(currentLightboxIndex + 1);
       }
-    });
+    };
   }
+
+  downloadBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (currentLightboxItem && currentLightboxItem.url) {
+      triggerDirectFileDownload(currentLightboxItem.url, currentLightboxItem.filename || 'media');
+    }
+  };
 
   // Keyboard Navigation for Lightbox (Seta esquerda, Seta direita, Esc)
   document.addEventListener('keydown', (e) => {
@@ -5561,12 +5641,14 @@ function setupLightboxHandlers() {
       e.preventDefault();
       const video = modalEl.querySelector('video');
       if (video) video.pause();
+      const audio = modalEl.querySelector('audio');
+      if (audio) audio.pause();
       modalEl.classList.add('hidden');
       currentLightboxItem = null;
     }
   });
 
-  downloadBtn.addEventListener('click', (e) => {
+  downloadBtn.onclick = (e) => {
     e.preventDefault();
     if (!currentLightboxItem) return;
 
@@ -5588,7 +5670,8 @@ function setupLightboxHandlers() {
         document.body.removeChild(a);
       }
     });
-  });
+  };
+}
 
   // Event delegation to capture media preview clicks (prevents CSP violations)
   if (elements.chatMessagesArea) {
@@ -5705,7 +5788,6 @@ function setupLightboxHandlers() {
       }
     });
   }
-}
 
 // Convert WhatsApp Markdown format symbols (*bold*, _italic_, ~strikethrough~, `code`) to secure HTML equivalents
 function formatWhatsAppMarkdown(text) {
@@ -7115,11 +7197,12 @@ async function openContactInfoModal(overrideSender) {
     }
   }
 
-  // Setup click on Avatar Wrapper to open Lightbox in full size
+  // Setup click on Avatar Wrapper to open Lightbox in full size (Standalone Profile Picture)
   if (elements.contactModalAvatarWrapper) {
     elements.contactModalAvatarWrapper.onclick = () => {
       if (currentModalPhotoUrl) {
-        window.openLightbox(currentModalPhotoUrl, 'image', `Foto de perfil - ${contactName}`);
+        const photoTitle = `Foto de perfil - ${contactName}`;
+        window.openLightbox(currentModalPhotoUrl, 'image', photoTitle, [{ url: currentModalPhotoUrl, fileType: 'image', filename: photoTitle }]);
       } else {
         showToast('Nenhuma foto de perfil disponível para ampliar.', 'info');
       }
@@ -7129,13 +7212,289 @@ async function openContactInfoModal(overrideSender) {
   if (elements.btnContactInfoViewPhoto) {
     elements.btnContactInfoViewPhoto.onclick = () => {
       if (currentModalPhotoUrl) {
-        window.openLightbox(currentModalPhotoUrl, 'image', `Foto de perfil - ${contactName}`);
+        const photoTitle = `Foto de perfil - ${contactName}`;
+        window.openLightbox(currentModalPhotoUrl, 'image', photoTitle, [{ url: currentModalPhotoUrl, fileType: 'image', filename: photoTitle }]);
       }
     };
   }
 
+  // Populate Shared Media, Docs, Audio & Links Tabs
+  const conversationMessages = (typeof currentChatMessages !== 'undefined' && Array.isArray(currentChatMessages))
+    ? currentChatMessages
+    : [];
+  populateContactMediaSection(conversationMessages);
+
   // Show Modal
   elements.contactInfoModal.classList.remove('hidden');
+}
+
+let currentContactMediaData = {
+  media: [],
+  docs: [],
+  audio: [],
+  links: []
+};
+
+let activeContactMediaTab = 'media';
+
+function populateContactMediaSection(messages) {
+  const contentEl = document.getElementById('contact-media-content');
+  const countMedia = document.getElementById('count-contact-media');
+  const countDocs = document.getElementById('count-contact-docs');
+  const countAudio = document.getElementById('count-contact-audio');
+  const countLinks = document.getElementById('count-contact-links');
+
+  if (!contentEl) return;
+
+  currentContactMediaData = { media: [], docs: [], audio: [], links: [] };
+
+  const baseUrl = (config.url || '').endsWith('/') ? config.url.slice(0, -1) : (config.url || '');
+
+  function fixUrl(url) {
+    if (!url) return '';
+    if (url.startsWith('http') || url.startsWith('data:') || url.startsWith('blob:')) return url;
+    return baseUrl + (url.startsWith('/') ? url : '/' + url);
+  }
+
+  // Method 1: Process API messages array
+  if (Array.isArray(messages)) {
+    messages.forEach(msg => {
+      const attachments = msg.attachments || (msg.content_attributes && msg.content_attributes.attachments) || [];
+      if (Array.isArray(attachments)) {
+        attachments.forEach(att => {
+          let url = fixUrl(att.data_url || att.file_url || att.thumb_url);
+          if (!url) return;
+
+          const fileType = (att.file_type || '').toLowerCase();
+          const filename = att.extension || att.filename || (url.split('/').pop().split('?')[0]) || 'arquivo';
+
+          if (fileType.includes('image') || fileType.includes('video') || /\.(png|jpe?g|gif|webp|mp4|mov|webm)$/i.test(filename)) {
+            const isVideo = fileType.includes('video') || /\.(mp4|mov|webm)$/i.test(filename);
+            if (!currentContactMediaData.media.some(m => m.url === url)) {
+              currentContactMediaData.media.push({ url, type: isVideo ? 'video' : 'image', filename });
+            }
+          } else if (fileType.includes('audio') || fileType.includes('voice') || /\.(ogg|mp3|wav|m4a|aac)$/i.test(filename)) {
+            if (!currentContactMediaData.audio.some(a => a.url === url)) {
+              currentContactMediaData.audio.push({ url, filename, created_at: msg.created_at });
+            }
+          } else {
+            if (!currentContactMediaData.docs.some(d => d.url === url)) {
+              currentContactMediaData.docs.push({ url, filename, created_at: msg.created_at });
+            }
+          }
+        });
+      }
+
+      // Parse URLs in content
+      if (msg.content) {
+        const urlMatches = msg.content.match(/(https?:\/\/[^\s]+)/g);
+        if (urlMatches) {
+          urlMatches.forEach(rawUrl => {
+            let url = rawUrl;
+            if (url.endsWith('.') || url.endsWith(',') || url.endsWith(')') || url.endsWith(']')) {
+              url = url.slice(0, -1);
+            }
+            if (!currentContactMediaData.links.some(l => l.url === url)) {
+              currentContactMediaData.links.push({ url, created_at: msg.created_at });
+            }
+          });
+        }
+      }
+    });
+  }
+
+  // Method 2: DOM fallback (scan #chat-messages-area directly)
+  const chatArea = elements.chatMessagesArea || document.getElementById('chat-messages-area');
+  if (chatArea) {
+    // Images & Videos from DOM
+    chatArea.querySelectorAll('.chat-img-preview').forEach(img => {
+      const url = fixUrl(img.getAttribute('src'));
+      const filename = img.getAttribute('data-filename') || 'imagem.png';
+      if (url && !currentContactMediaData.media.some(m => m.url === url)) {
+        currentContactMediaData.media.push({ url, type: 'image', filename });
+      }
+    });
+
+    chatArea.querySelectorAll('.btn-video-fullscreen, video').forEach(vid => {
+      const url = fixUrl(vid.getAttribute('data-url') || vid.getAttribute('src'));
+      const filename = vid.getAttribute('data-filename') || 'video.mp4';
+      if (url && !currentContactMediaData.media.some(m => m.url === url)) {
+        currentContactMediaData.media.push({ url, type: 'video', filename });
+      }
+    });
+
+    // Audios from DOM
+    chatArea.querySelectorAll('audio, .chat-audio-player').forEach(aud => {
+      const url = fixUrl(aud.getAttribute('src') || aud.getAttribute('data-url'));
+      const filename = aud.getAttribute('data-filename') || 'audio.ogg';
+      if (url && !currentContactMediaData.audio.some(a => a.url === url)) {
+        currentContactMediaData.audio.push({ url, filename });
+      }
+    });
+
+    // Docs from DOM
+    chatArea.querySelectorAll('.chat-file-download-link').forEach(link => {
+      const url = fixUrl(link.getAttribute('data-url') || link.getAttribute('href'));
+      const filename = link.getAttribute('data-filename') || link.textContent.trim() || 'documento';
+      if (url && !currentContactMediaData.docs.some(d => d.url === url)) {
+        currentContactMediaData.docs.push({ url, filename });
+      }
+    });
+
+    // Links from DOM
+    chatArea.querySelectorAll('.link-preview-container, .chat-msg-text a').forEach(a => {
+      let url = a.getAttribute('data-url') || a.getAttribute('href');
+      if (url && url.startsWith('http') && !url.includes('chatwoot')) {
+        if (url.endsWith('.') || url.endsWith(',')) url = url.slice(0, -1);
+        if (!currentContactMediaData.links.some(l => l.url === url)) {
+          currentContactMediaData.links.push({ url });
+        }
+      }
+    });
+  }
+
+  // Update counts
+  if (countMedia) countMedia.textContent = currentContactMediaData.media.length;
+  if (countDocs) countDocs.textContent = currentContactMediaData.docs.length;
+  if (countAudio) countAudio.textContent = currentContactMediaData.audio.length;
+  if (countLinks) countLinks.textContent = currentContactMediaData.links.length;
+
+  // Setup Tab Clicks
+  const tabs = document.querySelectorAll('.contact-media-tab');
+  tabs.forEach(tab => {
+    tab.onclick = (e) => {
+      e.preventDefault();
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeContactMediaTab = tab.getAttribute('data-tab');
+      renderContactMediaTabContent(activeContactMediaTab);
+    };
+  });
+
+  renderContactMediaTabContent(activeContactMediaTab);
+}
+
+function renderContactMediaTabContent(tabName) {
+  const contentEl = document.getElementById('contact-media-content');
+  if (!contentEl) return;
+
+  contentEl.innerHTML = '';
+
+  const items = currentContactMediaData[tabName] || [];
+
+  if (items.length === 0) {
+    const emptyLabels = {
+      media: 'Nenhuma foto ou vídeo nesta conversa.',
+      docs: 'Nenhum documento ou arquivo nesta conversa.',
+      audio: 'Nenhum áudio compartilhado nesta conversa.',
+      links: 'Nenhum link encontrado nesta conversa.'
+    };
+    contentEl.innerHTML = `<div class="contact-media-empty">${emptyLabels[tabName] || 'Nenhum item encontrado.'}</div>`;
+    return;
+  }
+
+  if (tabName === 'media') {
+    const grid = document.createElement('div');
+    grid.className = 'contact-media-grid';
+
+    items.forEach(item => {
+      const thumb = document.createElement('div');
+      thumb.className = 'contact-media-thumb';
+      thumb.title = item.filename;
+
+      if (item.type === 'video') {
+        thumb.innerHTML = `
+          <video src="${item.url}#t=0.5" preload="metadata"></video>
+          <div class="contact-media-video-icon">▶</div>
+        `;
+      } else {
+        thumb.innerHTML = `<img src="${item.url}" alt="${escapeHtml(item.filename)}" />`;
+      }
+
+      thumb.onclick = (e) => {
+        e.preventDefault();
+        window.openLightbox(item.url, item.type, item.filename, currentContactMediaData.media);
+      };
+
+      grid.appendChild(thumb);
+    });
+
+    contentEl.appendChild(grid);
+  } else if (tabName === 'docs') {
+    const list = document.createElement('div');
+    list.className = 'contact-media-list';
+
+    items.forEach(item => {
+      const docItem = document.createElement('div');
+      docItem.className = 'contact-media-item';
+      docItem.innerHTML = `
+        <span style="font-size: 16px; flex-shrink: 0;">📄</span>
+        <div class="contact-media-item-info">
+          <span class="contact-media-item-title">${escapeHtml(item.filename)}</span>
+          <span class="contact-media-item-sub">Documento</span>
+        </div>
+        <span style="font-size: 12px; color: var(--primary);">📥</span>
+      `;
+      docItem.onclick = (e) => {
+        e.preventDefault();
+        window.openLightbox(item.url, 'file', item.filename, currentContactMediaData.docs);
+      };
+      list.appendChild(docItem);
+    });
+
+    contentEl.appendChild(list);
+  } else if (tabName === 'audio') {
+    const list = document.createElement('div');
+    list.className = 'contact-media-list';
+
+    items.forEach(item => {
+      const audioItem = document.createElement('div');
+      audioItem.className = 'contact-media-item';
+      audioItem.innerHTML = `
+        <span style="font-size: 16px; flex-shrink: 0;">🎵</span>
+        <div class="contact-media-item-info">
+          <span class="contact-media-item-title">${escapeHtml(item.filename)}</span>
+          <span class="contact-media-item-sub">Mensagem de Áudio</span>
+        </div>
+        <span style="font-size: 12px; color: var(--primary);">▶️</span>
+      `;
+      audioItem.onclick = (e) => {
+        e.preventDefault();
+        window.openLightbox(item.url, 'audio', item.filename, currentContactMediaData.audio);
+      };
+      list.appendChild(audioItem);
+    });
+
+    contentEl.appendChild(list);
+  } else if (tabName === 'links') {
+    const list = document.createElement('div');
+    list.className = 'contact-media-list';
+
+    items.forEach(item => {
+      const linkItem = document.createElement('div');
+      linkItem.className = 'contact-media-item';
+      let hostname = item.url;
+      try {
+        hostname = new URL(item.url).hostname;
+      } catch (e) {}
+
+      linkItem.innerHTML = `
+        <span style="font-size: 16px; flex-shrink: 0;">🔗</span>
+        <div class="contact-media-item-info">
+          <span class="contact-media-item-title">${escapeHtml(item.url)}</span>
+          <span class="contact-media-item-sub">${escapeHtml(hostname)}</span>
+        </div>
+        <button type="button" class="btn-copy-detail" style="font-size: 11px;" title="Abrir link">🌐</button>
+      `;
+      linkItem.onclick = (e) => {
+        e.preventDefault();
+        window.open(item.url, '_blank');
+      };
+      list.appendChild(linkItem);
+    });
+
+    contentEl.appendChild(list);
+  }
 }
 
 function closeContactInfoModal() {
