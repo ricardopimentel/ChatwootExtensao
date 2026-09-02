@@ -1556,6 +1556,69 @@ textarea {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* AI Options Popover Menu */
+.ai-options-popover {
+  position: absolute;
+  bottom: 60px;
+  right: 14px;
+  width: 250px;
+  background-color: #161e2e;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  z-index: 1060;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 4px;
+  animation: scaleIn 0.12s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.ai-option-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: var(--transition);
+  color: var(--text-primary);
+  width: 100%;
+}
+
+.ai-option-item:hover {
+  background-color: var(--bg-tertiary);
+  transform: translateX(2px);
+}
+
+.ai-opt-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.ai-opt-text {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ai-opt-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ai-opt-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Mention Picker Popover */
 .mention-picker-popover {
   position: absolute;
@@ -1645,16 +1708,16 @@ textarea {
 
 /* Chat Mention Badge inside Message Bubbles */
 .chat-mention-badge {
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  font-size: 11.5px;
-  margin: 0 2px;
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 11.5px;
+    margin: 0 2px;
 }
 
 .chat-msg-bubble.outgoing .chat-mention-badge {
@@ -1664,9 +1727,9 @@ textarea {
 }
 
 .chat-msg-bubble.private-note .chat-mention-badge {
-  background: rgba(245, 158, 11, 0.25);
-  color: #b45309;
-  border-color: rgba(245, 158, 11, 0.4);
+    background: #342576;
+    color: #d6d3f1;
+    border-color: rgb(0 0 0 / 40%);
 }
 
 /* Mention Chips Preview Bar above chat input */
@@ -1912,13 +1975,13 @@ textarea {
 }
 
 .btn-toggle-private-note:hover {
-  color: #f59e0b;
-  background-color: rgba(245, 158, 11, 0.15) !important;
+  color: #a78bfa;
+  background-color: rgba(124, 58, 237, 0.18) !important;
 }
 
 .btn-toggle-private-note.active {
-  color: #f59e0b;
-  background-color: rgba(245, 158, 11, 0.25) !important;
+  color: #a78bfa;
+  background-color: rgba(124, 58, 237, 0.28) !important;
 }
 
 /* Private Note Mode Active Textarea Only Border */
@@ -1933,18 +1996,18 @@ textarea {
 }
 
 .chat-reply-container.private-mode textarea {
-  border: 1px solid #9b783d !important;
+  border: 1px solid #5b46b8 !important;
   color: var(--text-primary) !important;
   box-shadow: none !important;
 }
 
 .chat-reply-container.private-mode textarea:focus {
-  border: 1px solid #9b783d !important;
-  box-shadow: 0 0 0 2px rgba(155, 120, 61, 0.3) !important;
+  border: 1px solid #7c3aed !important;
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.35) !important;
 }
 
 .chat-reply-container.private-mode textarea::placeholder {
-  color: #9b783d;
+  color: #a78bfa;
   opacity: 0.95;
 }
 
@@ -1955,19 +2018,24 @@ textarea {
 }
 
 .chat-reply-container.private-mode .btn-toggle-private-note {
-  color: #9b783d;
+  color: #a78bfa;
+}
+
+.chat-reply-container.private-mode .btn-toggle-private-note:hover {
+  color: #c4b5fd;
+  background-color: rgba(124, 58, 237, 0.2) !important;
 }
 
 .chat-reply-container.private-mode .btn-toggle-private-note.active {
-  color: #9b783d;
-  background-color: rgba(155, 120, 61, 0.2) !important;
+  color: #a78bfa;
+  background-color: rgba(124, 58, 237, 0.28) !important;
   box-shadow: none !important;
 }
 
 /* Private Note Bubble Styling */
 .chat-msg-bubble.private-note {
     align-self: flex-end;
-    background: linear-gradient(135deg, #71694e, #474337) !important;
+    background: linear-gradient(135deg, #332570, #1b144d) !important;
     color: #ffffff !important;
     border-top-right-radius: 2px;
     border: none !important;
@@ -1985,8 +2053,8 @@ textarea {
 }
 
 .chat-msg-bubble.private-note .chat-mention-badge {
-    background: #9b783d;
-    color: #161e2e;
+    background: #342576;
+    color: #d6d3f1;
     border-color: rgb(0 0 0 / 40%);
 }
 

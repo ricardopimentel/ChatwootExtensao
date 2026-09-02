@@ -144,7 +144,25 @@
               <span class="toolbar-divider" style="width: 1px; height: 16px; background-color: var(--border-color); margin: 0 4px;"></span>
 
               <!-- AI Correct Text Button -->
-              <button type="button" class="btn-ai-correct-text hidden" id="btn-ai-correct-text" title="Corrigir texto com IA (Google Gemini)">✨</button>
+              <button type="button" class="btn-ai-correct-text hidden" id="btn-ai-correct-text" title="Opções de IA (Google Gemini)">✨</button>
+            </div>
+
+            <!-- AI Options Popover Menu -->
+            <div class="ai-options-popover hidden" id="ai-options-popover">
+              <button type="button" class="ai-option-item" id="btn-ai-opt-correct">
+                <span class="ai-opt-icon">🪄</span>
+                <div class="ai-opt-text">
+                  <span class="ai-opt-title">Corrigir texto atual</span>
+                  <span class="ai-opt-desc">Melhora a gramática e tom profissional</span>
+                </div>
+              </button>
+              <button type="button" class="ai-option-item" id="btn-ai-opt-generate">
+                <span class="ai-opt-icon">✍️</span>
+                <div class="ai-opt-text">
+                  <span class="ai-opt-title">Gerar resposta com IA</span>
+                  <span class="ai-opt-desc">Crie um texto a partir de uma instrução</span>
+                </div>
+              </button>
             </div>
             
             <!-- Emoji Picker Popover (WhatsApp style) -->
@@ -814,6 +832,29 @@
             <h4 class="contact-sub-title">Campos Personalizados:</h4>
             <div class="contact-attributes-list" id="contact-attributes-list"></div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Text Generation Modal -->
+    <div class="modal-backdrop hidden" id="ai-generate-modal">
+      <div class="contact-info-card" style="width: 340px;">
+        <div class="contact-info-header">
+          <h3>✨ Gerar Resposta com IA</h3>
+          <button type="button" class="btn-modal-close" id="btn-ai-generate-close" title="Fechar">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+        <div class="contact-info-body" style="align-items: stretch; gap: 10px; padding: 14px 16px;">
+          <label style="font-size: 11.5px; font-weight: 600; color: var(--text-muted);">
+            O que você deseja comunicar ao cliente?
+          </label>
+          <textarea id="ai-prompt-input" rows="3" placeholder="Ex: crie um texto informando que não é possível trocar o curso pois o período de inscrições se encerrou." style="width: 100%; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; font-size: 12px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
+          <span style="font-size: 10.5px; color: var(--text-muted);">A IA (Gemini) gerará um texto curto, claro e no tom profissional de atendimento.</span>
+        </div>
+        <div class="contact-info-footer" style="padding: 10px 16px; background-color: var(--bg-tertiary); border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+          <button type="button" class="btn btn-secondary btn-small" id="btn-ai-generate-cancel">Cancelar</button>
+          <button type="button" class="btn btn-primary btn-small" id="btn-ai-generate-submit">🚀 Gerar Texto</button>
         </div>
       </div>
     </div>

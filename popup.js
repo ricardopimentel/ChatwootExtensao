@@ -175,7 +175,15 @@ const elements = {
   contactModalValEmail: document.getElementById('contact-modal-val-email'),
   contactModalValInbox: document.getElementById('contact-modal-val-inbox'),
   contactModalValId: document.getElementById('contact-modal-val-id'),
-  btnCopyContactPhone: document.getElementById('btn-copy-contact-phone')
+  btnCopyContactPhone: document.getElementById('btn-copy-contact-phone'),
+  aiOptionsPopover: document.getElementById('ai-options-popover'),
+  btnAiOptCorrect: document.getElementById('btn-ai-opt-correct'),
+  btnAiOptGenerate: document.getElementById('btn-ai-opt-generate'),
+  aiGenerateModal: document.getElementById('ai-generate-modal'),
+  btnAiGenerateClose: document.getElementById('btn-ai-generate-close'),
+  btnAiGenerateCancel: document.getElementById('btn-ai-generate-cancel'),
+  btnAiGenerateSubmit: document.getElementById('btn-ai-generate-submit'),
+  aiPromptInput: document.getElementById('ai-prompt-input')
 };
 
 // INITIALIZATION
@@ -456,9 +464,56 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnChatResolve.addEventListener('click', resolveCurrentConversation);
   }
 
-  // AI Correct Text button listener
+  // AI Correct Text Button (Opens AI Options Popover)
   if (elements.btnAiCorrectText) {
-    elements.btnAiCorrectText.addEventListener('click', correctTextWithGemini);
+    elements.btnAiCorrectText.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (elements.aiOptionsPopover) {
+        elements.aiOptionsPopover.classList.toggle('hidden');
+      }
+    });
+  }
+
+  // AI Options Popover Handlers
+  if (elements.btnAiOptCorrect) {
+    elements.btnAiOptCorrect.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (elements.aiOptionsPopover) elements.aiOptionsPopover.classList.add('hidden');
+      correctTextWithGemini();
+    });
+  }
+
+  if (elements.btnAiOptGenerate) {
+    elements.btnAiOptGenerate.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (elements.aiOptionsPopover) elements.aiOptionsPopover.classList.add('hidden');
+      openAiGenerateModal();
+    });
+  }
+
+  // Close AI Options Popover on click outside
+  document.addEventListener('click', (e) => {
+    if (elements.aiOptionsPopover && !elements.aiOptionsPopover.classList.contains('hidden')) {
+      if (!e.target.closest('#ai-options-popover') && !e.target.closest('#btn-ai-correct-text')) {
+        elements.aiOptionsPopover.classList.add('hidden');
+      }
+    }
+  });
+
+  // AI Generate Modal Handlers
+  if (elements.btnAiGenerateClose) {
+    elements.btnAiGenerateClose.addEventListener('click', closeAiGenerateModal);
+  }
+  if (elements.btnAiGenerateCancel) {
+    elements.btnAiGenerateCancel.addEventListener('click', closeAiGenerateModal);
+  }
+  if (elements.aiGenerateModal) {
+    elements.aiGenerateModal.addEventListener('click', (e) => {
+      if (e.target === elements.aiGenerateModal) closeAiGenerateModal();
+    });
+  }
+  if (elements.btnAiGenerateSubmit) {
+    elements.btnAiGenerateSubmit.addEventListener('click', generateTextWithGemini);
   }
 
   // Toggle Private Note mode
@@ -6425,6 +6480,183 @@ async function loadReportsDashboard(silent = false) {
   }
 }
 
+async function callGeminiAPI(promptText) {
+  const apiKey = config.geminiApiKey ? config.geminiApiKey.trim() : '';
+  if (!apiKey) {
+    throw new Error('Configure sua Gemini API Key na aba Ajustes.');
+  }
+
+  const models = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro'
+  ];
+
+  let lastErrMsg = '';
+  for (const modelName of models) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }]
+        })
+      });
+
+      if (resp.ok) {
+        const resData = await resp.json();
+        const candidateText = resData.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (candidateText && candidateText.trim()) {
+          let text = candidateText.trim();
+          if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+            text = text.substring(1, text.length - 1).trim();
+          }
+          return text;
+        }
+      } else {
+        const errBody = await resp.json().catch(() => ({}));
+        const msg = errBody.error?.message || `HTTP ${resp.status}`;
+        lastErrMsg = msg;
+        if (resp.status === 503 || resp.status === 429 || msg.includes('high demand') || msg.includes('Quota')) {
+          await new Promise(r => setTimeout(r, 400));
+        }
+      }
+    } catch (e) {
+      lastErrMsg = e.message;
+    }
+  }
+
+  if (lastErrMsg.includes('high demand') || lastErrMsg.includes('Quota') || lastErrMsg.includes('503')) {
+    throw new Error('A IA do Gemini está com alta demanda temporária. Tente novamente em instantes!');
+  }
+  throw new Error(lastErrMsg || 'Falha na conexão com a API do Gemini.');
+}
+
+async function correctTextWithGemini() {
+  if (!config || !config.geminiApiKey || !config.geminiApiKey.trim()) {
+    showToast('Configure sua Gemini API Key na aba Ajustes.', 'warning');
+    return;
+  }
+
+  const input = elements.chatReplyInput;
+  if (!input) return;
+
+  const rawText = input.value.trim();
+  if (!rawText) {
+    showToast('Digite uma mensagem na caixa antes de corrigir com IA.', 'info');
+    return;
+  }
+
+  const btn = elements.btnAiCorrectText;
+  const originalHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳';
+  }
+
+  try {
+    const promptText = `Você é um especialista em comunicação e atendimento ao cliente em Português do Brasil (pt-BR).
+
+Sua tarefa é aprimorar o seguinte rascunho de mensagem para torná-lo:
+1. Extremamente claro, organizado e de fácil entendimento.
+2. Com ortografia, gramática e pontuação impecáveis (pt-BR).
+3. Em um tom altamente profissional, empático, cortês e objetivo para atendimento.
+
+Instruções estritas:
+- Mantenha a intenção e sentido original da mensagem.
+- Reorganize a estrutura das frases para garantir máxima clareza se o texto for confuso.
+- Não adicione comentários, saudações/despedidas extras ou aspas.
+- Retorne APENAS o texto aprimorado final.
+
+Rascunho: "${rawText}"`;
+
+    const correctedText = await callGeminiAPI(promptText);
+    input.value = correctedText;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    showToast('✨ Texto corrigido com sucesso pela IA!', 'success');
+  } catch (err) {
+    console.error('[Gemini AI Error]:', err);
+    showToast(err.message.includes('alta demanda') ? err.message : `Erro ao corrigir com IA: ${err.message}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+}
+
+function openAiGenerateModal() {
+  const modal = document.getElementById('ai-generate-modal') || elements.aiGenerateModal;
+  const promptInput = document.getElementById('ai-prompt-input') || elements.aiPromptInput;
+
+  if (promptInput) {
+    promptInput.value = '';
+  }
+
+  if (modal) {
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+      if (promptInput) promptInput.focus();
+    }, 100);
+  } else {
+    console.error('Modal #ai-generate-modal não encontrado no DOM!');
+  }
+}
+
+function closeAiGenerateModal() {
+  if (elements.aiGenerateModal) elements.aiGenerateModal.classList.add('hidden');
+}
+
+async function generateTextWithGemini() {
+  const promptInput = elements.aiPromptInput;
+  if (!promptInput) return;
+
+  const userInstruction = promptInput.value.trim();
+  if (!userInstruction) {
+    showToast('Por favor, informe a instrução para a IA gerar a resposta.', 'info');
+    return;
+  }
+
+  const submitBtn = elements.btnAiGenerateSubmit;
+  const originalText = submitBtn ? submitBtn.textContent : '';
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '⏳ Gerando...';
+  }
+
+  try {
+    const promptText = `Você é um assistente especialista em atendimento ao cliente via suporte de chat no Brasil (pt-BR).
+Sua missão é criar uma mensagem de resposta perfeita para o cliente com base na seguinte instrução do atendente:
+
+Instrução do atendente: "${userInstruction}"
+
+Regras de resposta:
+- Escreva uma mensagem curta, clara, gentil, objetiva e em tom estritamente profissional (pt-BR).
+- Pronta para ser enviada diretamente ao cliente.
+- Não adicione introduções, explicações extras, comentários ou aspas em volta da mensagem.
+- Retorne APENAS o texto da mensagem final.`;
+
+    const generatedText = await callGeminiAPI(promptText);
+    if (generatedText && elements.chatReplyInput) {
+      elements.chatReplyInput.value = generatedText;
+      elements.chatReplyInput.dispatchEvent(new Event('input', { bubbles: true }));
+      showToast('✨ Resposta gerada com sucesso pela IA!', 'success');
+      closeAiGenerateModal();
+    }
+  } catch (err) {
+    console.error('[Gemini AI Generate Error]:', err);
+    showToast(err.message.includes('alta demanda') ? err.message : `Erro ao gerar texto com IA: ${err.message}`, 'error');
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
+    }
+  }
+}
+
 function showReportsError(message) {
   elements.reportsErrorText.textContent = message;
   hideReportsProgress();
@@ -6469,117 +6701,6 @@ function updateAiButtonVisibility() {
       elements.btnAiCorrectText.classList.remove('hidden');
     } else {
       elements.btnAiCorrectText.classList.add('hidden');
-    }
-  }
-}
-
-async function correctTextWithGemini() {
-  if (!config || !config.geminiApiKey || !config.geminiApiKey.trim()) {
-    showToast('Configure sua Gemini API Key na aba Ajustes.', 'warning');
-    return;
-  }
-
-  const input = elements.chatReplyInput;
-  if (!input) return;
-
-  const rawText = input.value.trim();
-  if (!rawText) {
-    showToast('Digite uma mensagem na caixa antes de corrigir com IA.', 'info');
-    return;
-  }
-
-  const btn = elements.btnAiCorrectText;
-  const originalHtml = btn ? btn.innerHTML : '';
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '⏳';
-  }
-
-  try {
-    const apiKey = config.geminiApiKey.trim();
-    const promptText = `Você é um especialista em comunicação e atendimento ao cliente em Português do Brasil (pt-BR).
-
-Sua tarefa é aprimorar o seguinte rascunho de mensagem para torná-lo:
-1. Extremamente claro, organizado e de fácil entendimento.
-2. Com ortografia, gramática e pontuação impecáveis (pt-BR).
-3. Em um tom altamente profissional, empático, cortês e objetivo para atendimento.
-
-Instruções estritas:
-- Mantenha a intenção e sentido original da mensagem.
-- Reorganize a estrutura das frases para garantir máxima clareza se o texto for confuso.
-- Não adicione comentários, saudações/despedidas extras ou aspas.
-- Retorne APENAS o texto aprimorado final.
-
-Rascunho: "${rawText}"`;
-
-    let resData = null;
-    let lastErrMsg = '';
-    const models = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-2.0-flash-lite',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro'
-    ];
-
-    for (const modelName of models) {
-      try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }]
-          })
-        });
-
-        if (resp.ok) {
-          resData = await resp.json();
-          break;
-        } else {
-          const errBody = await resp.json().catch(() => ({}));
-          const msg = errBody.error?.message || `HTTP ${resp.status}`;
-          lastErrMsg = msg;
-
-          if (resp.status === 503 || resp.status === 429 || msg.includes('high demand') || msg.includes('Quota')) {
-            await new Promise(r => setTimeout(r, 400));
-          }
-        }
-      } catch (e) {
-        lastErrMsg = e.message;
-      }
-    }
-
-    if (!resData) {
-      if (lastErrMsg.includes('high demand') || lastErrMsg.includes('Quota') || lastErrMsg.includes('503')) {
-        showToast('⚠️ A IA do Gemini está com alta demanda temporária. Tente novamente em instantes!', 'warning');
-        return;
-      }
-      throw new Error(lastErrMsg || 'Falha na conexão com a API do Gemini.');
-    }
-
-    const candidateText = resData.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (candidateText && candidateText.trim()) {
-      let correctedText = candidateText.trim();
-      if ((correctedText.startsWith('"') && correctedText.endsWith('"')) || (correctedText.startsWith("'") && correctedText.endsWith("'"))) {
-        correctedText = correctedText.substring(1, correctedText.length - 1).trim();
-      }
-
-      input.value = correctedText;
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-      
-      showToast('✨ Texto corrigido com sucesso pela IA!', 'success');
-    } else {
-      throw new Error('A IA não retornou nenhum texto.');
-    }
-  } catch (err) {
-    console.error('[Gemini AI Error]:', err);
-    showToast(`Erro ao corrigir com IA: ${err.message}`, 'error');
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = originalHtml;
     }
   }
 }
