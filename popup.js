@@ -162,7 +162,20 @@ const elements = {
   mentionPicker: document.getElementById('mention-picker'),
   mentionPickerList: document.getElementById('mention-picker-list'),
   mentionChipsBar: document.getElementById('mention-chips-bar'),
-  mentionChipsList: document.getElementById('mention-chips-list')
+  mentionChipsList: document.getElementById('mention-chips-list'),
+  contactInfoModal: document.getElementById('contact-info-modal'),
+  btnContactInfoClose: document.getElementById('btn-contact-info-close'),
+  btnContactInfoDismiss: document.getElementById('btn-contact-info-dismiss'),
+  btnContactInfoViewPhoto: document.getElementById('btn-contact-info-view-photo'),
+  contactModalAvatarWrapper: document.getElementById('contact-modal-avatar-wrapper'),
+  contactModalAvatar: document.getElementById('contact-modal-avatar'),
+  contactModalName: document.getElementById('contact-modal-name'),
+  contactModalPhone: document.getElementById('contact-modal-phone'),
+  contactModalValPhone: document.getElementById('contact-modal-val-phone'),
+  contactModalValEmail: document.getElementById('contact-modal-val-email'),
+  contactModalValInbox: document.getElementById('contact-modal-val-inbox'),
+  contactModalValId: document.getElementById('contact-modal-val-id'),
+  btnCopyContactPhone: document.getElementById('btn-copy-contact-phone')
 };
 
 // INITIALIZATION
@@ -458,6 +471,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.chatReplyInput.addEventListener('input', handleChatInputForMentions);
     elements.chatReplyInput.addEventListener('keydown', handleChatKeydownForMentions);
   }
+
+  // Contact Info Modal Handlers
+  if (elements.chatHeaderAvatar) {
+    elements.chatHeaderAvatar.addEventListener('click', () => openContactInfoModal());
+  }
+  if (elements.chatHeaderName) {
+    elements.chatHeaderName.addEventListener('click', () => openContactInfoModal());
+  }
+  if (elements.btnContactInfoClose) {
+    elements.btnContactInfoClose.addEventListener('click', closeContactInfoModal);
+  }
+  if (elements.btnContactInfoDismiss) {
+    elements.btnContactInfoDismiss.addEventListener('click', closeContactInfoModal);
+  }
+  if (elements.contactInfoModal) {
+    elements.contactInfoModal.addEventListener('click', (e) => {
+      if (e.target === elements.contactInfoModal) closeContactInfoModal();
+    });
+  }
+  if (elements.btnCopyContactPhone) {
+    elements.btnCopyContactPhone.addEventListener('click', copyContactPhoneToClipboard);
+  }
+
+  // Global CSP-compliant image error handler for avatars
+  document.addEventListener('error', (e) => {
+    if (e.target && e.target.tagName === 'IMG' && e.target.getAttribute('data-initials')) {
+      const initials = e.target.getAttribute('data-initials') || 'C';
+      const parent = e.target.parentNode;
+      if (parent) {
+        parent.innerHTML = initials;
+      }
+    }
+  }, true);
+
+  // Global CSP-compliant click listener for top chat header
+  document.addEventListener('click', (e) => {
+    // Exclude header action buttons
+    if (e.target.closest('#btn-chat-back, #btn-chat-popout, #btn-chat-reminder, #btn-chat-resolve, .btn-action-icon')) return;
+
+    const headerTarget = e.target.closest('.chat-header-avatar, .chat-header-name, .chat-header-info');
+    if (headerTarget) {
+      openContactInfoModal();
+    }
+  });
 
   // Chat reply submit
   elements.chatReplyBar.addEventListener('submit', sendChatMessage);
@@ -3172,16 +3229,21 @@ function filterAndRenderConversations() {
   }
 }
 
+function getSenderAvatarUrl(sender) {
+  if (!sender) return '';
+  return sender.avatar_url || sender.thumbnail || sender.additional_attributes?.avatar_url || sender.additional_attributes?.profile_user?.avatar_url || '';
+}
+
 function getAvatarContent(contactName, avatarUrl) {
   const initials = contactName ? contactName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'C';
-  if (avatarUrl) {
-    let fullUrl = avatarUrl;
+  if (avatarUrl && typeof avatarUrl === 'string' && avatarUrl.trim()) {
+    let fullUrl = avatarUrl.trim();
     if (!fullUrl.startsWith('http')) {
       const baseUrl = (config.url || '').endsWith('/') ? config.url.slice(0, -1) : (config.url || '');
-      const relativeUrl = avatarUrl.startsWith('/') ? avatarUrl : '/' + avatarUrl;
+      const relativeUrl = fullUrl.startsWith('/') ? fullUrl : '/' + fullUrl;
       fullUrl = baseUrl + relativeUrl;
     }
-    return `<img src="${fullUrl}" alt="${contactName}" data-initials="${initials}" />`;
+    return `<img src="${fullUrl}" alt="${escapeHtml(contactName)}" data-initials="${initials}" />`;
   }
   return initials;
 }
@@ -3270,7 +3332,7 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
       }
 
       const contactName = item.meta?.sender?.name || 'Cliente';
-      const avatarUrl = item.meta?.sender?.avatar_url;
+      const avatarUrl = getSenderAvatarUrl(item.meta?.sender || item.sender);
       const avatarContent = getAvatarContent(contactName, avatarUrl);
       
       const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
@@ -3511,7 +3573,7 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   let phoneNumber = '';
   const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
   if (conversation) {
-    avatarUrl = conversation.meta?.sender?.avatar_url || '';
+    avatarUrl = getSenderAvatarUrl(conversation.meta?.sender || conversation.sender);
     phoneNumber = conversation.meta?.sender?.phone_number || conversation.meta?.sender?.identifier || '';
   }
 
@@ -3528,8 +3590,9 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`)
     .then(conv => {
       if (conv && currentActiveChat && currentActiveChat.id === conversationId) {
-        if (conv.meta?.sender?.avatar_url) {
-          elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, conv.meta.sender.avatar_url);
+        const fetchedAvatar = getSenderAvatarUrl(conv.meta?.sender || conv.sender);
+        if (fetchedAvatar) {
+          elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, fetchedAvatar);
         }
         const fetchedPhone = conv.meta?.sender?.phone_number || conv.meta?.sender?.identifier || '';
         if (fetchedPhone && fetchedPhone !== phoneNumber) {
@@ -3994,7 +4057,7 @@ function renderChatMessages(messages, silent, isPrepend = false) {
         }
 
         // Generate avatar HTML
-        let avatarUrl = msg.sender?.avatar_url || '';
+        let avatarUrl = getSenderAvatarUrl(msg.sender);
         if (avatarUrl && !avatarUrl.startsWith('http')) {
           const baseUrl = config.url.endsWith('/') ? config.url.slice(0, -1) : config.url;
           const relativeUrl = avatarUrl.startsWith('/') ? avatarUrl : '/' + avatarUrl;
@@ -4032,7 +4095,6 @@ function renderChatMessages(messages, silent, isPrepend = false) {
         } else {
           messagesHtml += `
             <div class="chat-msg-row incoming">
-              ${avatarHtml}
               <div class="${bubbleClass}" data-msg-id="${msg.id}" data-msg-content="${cleanContent}" data-sender-name="${senderName}">
                 <button type="button" class="btn-msg-menu" title="Opções da mensagem">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -6756,6 +6818,108 @@ function updateMentionChipsUI() {
   });
 
   elements.mentionChipsBar.classList.remove('hidden');
+}
+
+// WHATSAPP-STYLE CONTACT INFO MODAL & PHOTO LIGHTBOX
+let currentModalPhotoUrl = '';
+let currentModalContactName = '';
+
+async function openContactInfoModal(overrideSender) {
+  if (!elements.contactInfoModal) return;
+
+  const conversationId = currentActiveChat ? currentActiveChat.id : null;
+  const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
+
+  const sender = overrideSender || conversation?.meta?.sender || conversation?.sender;
+  const contactName = sender?.name || currentActiveChat?.contactName || 'Cliente';
+  const avatarUrl = getSenderAvatarUrl(sender);
+  const phone = sender?.phone_number || sender?.identifier || '';
+  const email = sender?.email || '';
+  const contactId = sender?.id || conversation?.meta?.sender?.id || '-';
+  const inboxId = currentActiveChat?.inboxId;
+  const accountId = currentActiveChat?.accountId;
+
+  currentModalContactName = contactName;
+
+  // Render Name & Phone
+  if (elements.contactModalName) elements.contactModalName.textContent = contactName;
+  if (elements.contactModalPhone) elements.contactModalPhone.textContent = phone || 'Sem número informado';
+  if (elements.contactModalValPhone) elements.contactModalValPhone.textContent = phone || 'Não informado';
+  if (elements.contactModalValEmail) elements.contactModalValEmail.textContent = email || 'Não informado';
+  if (elements.contactModalValId) elements.contactModalValId.textContent = contactId;
+
+  // Inbox Name
+  if (elements.contactModalValInbox) {
+    elements.contactModalValInbox.textContent = 'Carregando...';
+    if (accountId && inboxId) {
+      getInboxName(accountId, inboxId).then(name => {
+        if (elements.contactModalValInbox) elements.contactModalValInbox.textContent = name || `Inbox #${inboxId}`;
+      });
+    } else {
+      elements.contactModalValInbox.textContent = 'N/D';
+    }
+  }
+
+  // Render Avatar inside Modal
+  const initials = contactName ? contactName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'C';
+  if (elements.contactModalAvatar) {
+    if (avatarUrl) {
+      let fullUrl = avatarUrl.trim();
+      if (!fullUrl.startsWith('http')) {
+        const baseUrl = (config.url || '').endsWith('/') ? config.url.slice(0, -1) : (config.url || '');
+        const relativeUrl = fullUrl.startsWith('/') ? fullUrl : '/' + fullUrl;
+        fullUrl = baseUrl + relativeUrl;
+      }
+      currentModalPhotoUrl = fullUrl;
+      elements.contactModalAvatar.innerHTML = `<img src="${fullUrl}" alt="${escapeHtml(contactName)}" data-initials="${initials}" />`;
+      if (elements.btnContactInfoViewPhoto) elements.btnContactInfoViewPhoto.classList.remove('hidden');
+    } else {
+      currentModalPhotoUrl = '';
+      elements.contactModalAvatar.innerHTML = initials;
+      if (elements.btnContactInfoViewPhoto) elements.btnContactInfoViewPhoto.classList.add('hidden');
+    }
+  }
+
+  // Setup click on Avatar Wrapper to open Lightbox in full size
+  if (elements.contactModalAvatarWrapper) {
+    elements.contactModalAvatarWrapper.onclick = () => {
+      if (currentModalPhotoUrl) {
+        window.openLightbox(currentModalPhotoUrl, 'image', `Foto de perfil - ${contactName}`);
+      } else {
+        showToast('Nenhuma foto de perfil disponível para ampliar.', 'info');
+      }
+    };
+  }
+
+  if (elements.btnContactInfoViewPhoto) {
+    elements.btnContactInfoViewPhoto.onclick = () => {
+      if (currentModalPhotoUrl) {
+        window.openLightbox(currentModalPhotoUrl, 'image', `Foto de perfil - ${contactName}`);
+      }
+    };
+  }
+
+  // Show Modal
+  elements.contactInfoModal.classList.remove('hidden');
+}
+
+function closeContactInfoModal() {
+  if (elements.contactInfoModal) {
+    elements.contactInfoModal.classList.add('hidden');
+  }
+}
+
+function copyContactPhoneToClipboard() {
+  const phone = elements.contactModalValPhone ? elements.contactModalValPhone.textContent : '';
+  if (!phone || phone === 'Não informado') {
+    showToast('Nenhum telefone para copiar.', 'info');
+    return;
+  }
+  navigator.clipboard.writeText(phone).then(() => {
+    showToast('📱 Telefone copiado para a área de transferência!', 'success');
+  }).catch(() => {
+    showToast('Falha ao copiar telefone.', 'error');
+  });
 }
 
 

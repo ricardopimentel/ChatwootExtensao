@@ -2265,7 +2265,7 @@ textarea {
   width: 100%;
   height: 100%;
   background-color: rgba(10, 15, 30, 0.95);
-  z-index: 1000;
+  z-index: 4000;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3536,6 +3536,215 @@ mark.search-highlight {
   align-items: center;
   justify-content: space-between;
   box-sizing: border-box;
+}
+
+/* Modal Backdrop */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(10, 15, 30, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  animation: fadeIn 0.15s ease;
+}
+
+/* WhatsApp-style Contact Details Modal */
+.contact-info-card {
+  width: 320px;
+  max-width: 90vw;
+  max-height: 85vh;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleIn 0.18s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.contact-info-header {
+  padding: 12px 16px;
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.contact-info-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.contact-info-body {
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.contact-modal-avatar-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.contact-modal-avatar-wrapper {
+  position: relative;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--primary);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.contact-modal-avatar-wrapper:hover {
+  transform: scale(1.04);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+}
+
+.contact-modal-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background-color: #3b82f6;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.contact-modal-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.contact-avatar-zoom-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.contact-modal-avatar-wrapper:hover .contact-avatar-zoom-overlay {
+  opacity: 1;
+}
+
+.contact-avatar-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.contact-modal-name {
+  margin: 0 0 2px 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+  word-break: break-word;
+}
+
+.contact-modal-phone {
+  margin: 0 0 16px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.contact-details-group {
+  width: 100%;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.contact-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.contact-detail-label {
+  color: var(--text-muted);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.contact-detail-val {
+  color: var(--text-primary);
+  font-weight: 500;
+  word-break: break-all;
+  text-align: right;
+  flex: 1;
+}
+
+.btn-copy-detail {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.btn-copy-detail:hover {
+  opacity: 1;
+}
+
+.contact-info-footer {
+  padding: 10px 16px;
+  background-color: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chat-header-avatar, .chat-header-name {
+  cursor: pointer;
+}
+
+.chat-header-avatar:hover {
+  opacity: 0.9;
+  filter: brightness(1.1);
 }
 
 .chat-item-last-msg.matching-msg {

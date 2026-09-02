@@ -135,7 +135,7 @@ async function initConnection(force = false) {
     console.log(`[Chatwoot Helper] Profile loaded successfully. User ID: ${userId}, Accounts: ${accounts.length}`);
     connectWebSocket();
   } catch (err) {
-    console.error('[Chatwoot Helper] Connection initialization failed:', err.message);
+    console.warn('[Chatwoot Helper] Conexão com a API falhou:', err.message);
     scheduleReconnect(10000); // Retry after 10 seconds
   } finally {
     isInitializing = false;
@@ -153,6 +153,9 @@ async function fetchProfile(baseUrl, token) {
   });
 
   if (!response.ok) {
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      throw new Error(`Servidor Chatwoot indisponível temporariamente (HTTP ${response.status} Bad Gateway/Service Unavailable).`);
+    }
     throw new Error(`Profile request failed with status: ${response.status}`);
   }
 
