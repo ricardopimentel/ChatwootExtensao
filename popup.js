@@ -95,9 +95,20 @@ const elements = {
   newChatForm: document.getElementById('new-chat-form'),
   newChatPhone: document.getElementById('new-chat-phone'),
   newChatName: document.getElementById('new-chat-name'),
+  newChatPhoneName: document.getElementById('new-chat-phone-name'),
+  newChatContactsDropdown: document.getElementById('new-chat-contacts-dropdown'),
   newChatAccount: document.getElementById('new-chat-account'),
   newChatInbox: document.getElementById('new-chat-inbox'),
   inboxWarning: document.getElementById('inbox-channel-warning'),
+  btnModeContact: document.getElementById('btn-mode-contact'),
+  btnModePhone: document.getElementById('btn-mode-phone'),
+  groupContactSearch: document.getElementById('group-contact-search'),
+  groupPhoneInput: document.getElementById('group-phone-input'),
+  groupPhoneNameOptional: document.getElementById('group-phone-name-optional'),
+  selectedContactCard: document.getElementById('selected-contact-card'),
+  selectedContactName: document.getElementById('selected-contact-name'),
+  selectedContactPhone: document.getElementById('selected-contact-phone'),
+  btnRemoveSelectedContact: document.getElementById('btn-remove-selected-contact'),
   
   // Bulk Messaging Selectors
   subpaneIndividual: document.getElementById('subpane-individual'),
@@ -256,6 +267,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupLightboxHandlers();
     setupContextMenuHandlers();
     setupBulkMessaging();
+    setupNewChatContactSearch();
 
     // Close buttons
     const btnReplyPreviewClose = document.getElementById('btn-reply-preview-close');
@@ -477,6 +489,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Phone contact search listeners
+  let newChatPhoneDebounce = null;
+  elements.newChatPhone.addEventListener('input', () => {
+    if (newChatPhoneDebounce) clearTimeout(newChatPhoneDebounce);
+    newChatPhoneDebounce = setTimeout(lookupContactByPhone, 350);
+  });
   elements.newChatPhone.addEventListener('blur', lookupContactByPhone);
   elements.newChatPhone.addEventListener('change', lookupContactByPhone);
   elements.newChatAccount.addEventListener('change', lookupContactByPhone);
@@ -1954,12 +1971,183 @@ async function deleteReminder(id) {
   loadReminders(elements.searchInput?.value || '');
 }
 
-// INICIAR CONVERSA POR TELEFONE
+let newChatSearchTimeout = null;
+let currentNewChatMode = 'contact'; // 'contact' or 'phone'
+
+function setupNewChatContactSearch() {
+  const nameInput = elements.newChatName;
+  const phoneInput = elements.newChatPhone;
+  const phoneNameInput = elements.newChatPhoneName;
+  const dropdown = elements.newChatContactsDropdown;
+  const btnModeContact = elements.btnModeContact;
+  const btnModePhone = elements.btnModePhone;
+  const groupContactSearch = elements.groupContactSearch;
+  const groupPhoneInput = elements.groupPhoneInput;
+  const groupPhoneNameOptional = elements.groupPhoneNameOptional;
+  const selectedContactCard = elements.selectedContactCard;
+  const selectedContactName = elements.selectedContactName;
+  const selectedContactPhone = elements.selectedContactPhone;
+  const btnRemoveSelected = elements.btnRemoveSelectedContact;
+
+  if (!btnModeContact || !btnModePhone) return;
+
+  // Toggle Mode Handler
+  const switchMode = (mode) => {
+    currentNewChatMode = mode;
+    if (mode === 'contact') {
+      btnModeContact.classList.add('active');
+      btnModePhone.classList.remove('active');
+      groupContactSearch?.classList.remove('hidden');
+      groupPhoneInput?.classList.add('hidden');
+      groupPhoneNameOptional?.classList.add('hidden');
+      if (phoneInput) phoneInput.required = false;
+    } else {
+      btnModePhone.classList.add('active');
+      btnModeContact.classList.remove('active');
+      groupContactSearch?.classList.add('hidden');
+      groupPhoneInput?.classList.remove('hidden');
+      groupPhoneNameOptional?.classList.remove('hidden');
+      if (phoneInput) phoneInput.required = true;
+      if (dropdown) dropdown.classList.add('hidden');
+    }
+  };
+
+  btnModeContact.addEventListener('click', () => switchMode('contact'));
+  btnModePhone.addEventListener('click', () => switchMode('phone'));
+
+  // Clear selected contact card
+  if (btnRemoveSelected) {
+    btnRemoveSelected.addEventListener('click', () => {
+      if (nameInput) nameInput.value = '';
+      if (phoneInput) phoneInput.value = '';
+      selectedContactCard?.classList.add('hidden');
+      nameInput?.classList.remove('hidden');
+      nameInput?.focus();
+    });
+  }
+
+  // Live Contact Search logic
+  const performSearch = (query) => {
+    if (currentNewChatMode !== 'contact') return;
+    if (newChatSearchTimeout) clearTimeout(newChatSearchTimeout);
+
+    const q = query.trim();
+    if (q.length < 2) {
+      if (dropdown) {
+        dropdown.classList.add('hidden');
+        dropdown.innerHTML = '';
+      }
+      return;
+    }
+
+    newChatSearchTimeout = setTimeout(async () => {
+      const accountId = elements.newChatAccount?.value || config?.defaultAccount;
+      if (!accountId) {
+        dropdown?.classList.add('hidden');
+        return;
+      }
+
+      try {
+        if (dropdown) {
+          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Pesquisando contatos...</div>`;
+          dropdown.classList.remove('hidden');
+        }
+
+        const res = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/search?q=${encodeURIComponent(q)}`);
+        const contacts = res && Array.isArray(res) ? res : (res && Array.isArray(res.payload) ? res.payload : []);
+
+        if (!dropdown) return;
+
+        if (contacts.length === 0) {
+          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Nenhum contato encontrado com esse nome. Mude para o modo "Telefone" para criar.</div>`;
+          return;
+        }
+
+        dropdown.innerHTML = contacts.map(c => {
+          const cName = c.name || 'Sem nome';
+          const cPhone = c.phone_number || c.email || 'Sem telefone';
+          const initial = (cName.charAt(0) || 'C').toUpperCase();
+          const avatarUrl = c.thumbnail || c.avatar_url;
+
+          return `
+            <div class="contact-search-item" data-id="${c.id}" data-name="${encodeURIComponent(cName)}" data-phone="${encodeURIComponent(cPhone)}">
+              ${avatarUrl ? `<img src="${avatarUrl}" class="contact-search-avatar">` : `<div class="contact-search-avatar">${initial}</div>`}
+              <div class="contact-search-info">
+                <span class="contact-search-name">${escapeHtml(cName)}</span>
+                <span class="contact-search-detail">${escapeHtml(cPhone)}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        dropdown.querySelectorAll('.contact-search-item').forEach(item => {
+          item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const selName = decodeURIComponent(item.getAttribute('data-name') || '');
+            const selPhone = decodeURIComponent(item.getAttribute('data-phone') || '');
+
+            if (nameInput) nameInput.value = selName;
+            if (phoneInput && selPhone && selPhone !== 'Sem telefone') {
+              phoneInput.value = selPhone;
+            }
+
+            if (dropdown) {
+              dropdown.classList.add('hidden');
+              dropdown.innerHTML = '';
+            }
+
+            // Show selected contact card summary
+            if (selectedContactCard && selectedContactName && selectedContactPhone) {
+              selectedContactName.textContent = selName;
+              selectedContactPhone.textContent = selPhone !== 'Sem telefone' ? selPhone : 'Sem telefone registrado';
+              selectedContactCard.classList.remove('hidden');
+              if (nameInput) nameInput.classList.add('hidden');
+            }
+
+            showToast(`Contato "${selName}" selecionado!`, 'success');
+          });
+        });
+
+      } catch (err) {
+        console.warn('Error searching contacts:', err);
+        if (dropdown) dropdown.classList.add('hidden');
+      }
+    }, 280);
+  };
+
+  if (nameInput) {
+    nameInput.addEventListener('input', (e) => performSearch(e.target.value));
+  }
+
+  document.addEventListener('click', (e) => {
+    if (dropdown && !e.target.closest('#new-chat-name') && !e.target.closest('#new-chat-contacts-dropdown')) {
+      dropdown.classList.add('hidden');
+    }
+  });
+}
+
+// INICIAR CONVERSA POR TELEFONE OU CONTATO
 async function handleNewChatSubmit(e) {
   e.preventDefault();
 
-  const phoneRaw = elements.newChatPhone.value.trim();
-  const name = elements.newChatName.value.trim();
+  let phoneRaw = '';
+  let name = '';
+
+  if (currentNewChatMode === 'contact') {
+    phoneRaw = elements.newChatPhone.value.trim();
+    name = elements.newChatName.value.trim();
+    if (!phoneRaw) {
+      showToast('Pesquise e selecione um contato na lista.', 'error');
+      return;
+    }
+  } else {
+    phoneRaw = elements.newChatPhone.value.trim();
+    name = elements.newChatPhoneName ? elements.newChatPhoneName.value.trim() : '';
+    if (!phoneRaw) {
+      showToast('Digite o número de telefone.', 'error');
+      return;
+    }
+  }
   const accountId = elements.newChatAccount.value;
   const inboxId = elements.newChatInbox.value;
 
@@ -3083,32 +3271,33 @@ async function lookupContactByPhone() {
       }
     }
     
+    const nameFormGroup = elements.groupPhoneNameOptional || elements.newChatPhoneName?.closest('.form-group') || elements.newChatName?.closest('.form-group');
+
     if (contactFound) {
       // Contact found!
-      elements.newChatName.value = contactFound.name || '';
+      if (elements.newChatPhoneName) elements.newChatPhoneName.value = contactFound.name || '';
+      if (elements.newChatName) elements.newChatName.value = contactFound.name || '';
       
-      // Hide the name input container since contact exists
-      nameFormGroup.classList.add('hidden');
+      // Hide the optional name input field completely since contact exists
+      if (nameFormGroup) nameFormGroup.classList.add('hidden');
       
-      searchHelper.innerHTML = `✓ Contato encontrado: <strong style="color:var(--success);">${contactFound.name}</strong> (Nome preenchido automaticamente)`;
+      searchHelper.innerHTML = `✓ Contato encontrado: <strong style="color:var(--success);">${escapeHtml(contactFound.name || 'Cliente')}</strong>`;
       searchHelper.className = 'helper-text success-text';
     } else {
       // Contact not found!
-      elements.newChatName.value = '';
+      if (elements.newChatPhoneName) elements.newChatPhoneName.value = '';
       
-      // Show the name input container so they can type
-      nameFormGroup.classList.remove('hidden');
+      // Show the optional name input field so user can type the name
+      if (nameFormGroup) nameFormGroup.classList.remove('hidden');
       
-      searchHelper.textContent = 'Novo contato. Digite o nome dele abaixo.';
+      searchHelper.textContent = 'Novo contato (preencha o nome abaixo se desejar salvar).';
       searchHelper.className = 'helper-text';
     }
   } catch (err) {
     console.error('Error searching contact:', err);
     searchHelper.textContent = 'Erro ao verificar número na API.';
     searchHelper.className = 'helper-text warning-text';
-    
-    // Fallback: show the name field so the user can input it manually
-    nameFormGroup.classList.remove('hidden');
+    if (nameFormGroup) nameFormGroup.classList.remove('hidden');
   } finally {
     isSearchingContact = false;
   }

@@ -3747,40 +3747,49 @@ body.chat-window-mode #btn-reminder-back-to-chat {
 
 .sub-tabs-bar {
   display: flex;
-  gap: 6px;
-  margin-bottom: 14px;
-  background-color: var(--bg-tertiary);
-  padding: 4px;
-  border-radius: var(--border-radius-sm);
+  background: rgba(15, 23, 42, 0.6);
   border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 4px;
+  margin-bottom: 14px;
 }
 
 .sub-tab-btn {
   flex: 1;
-  padding: 6px 10px;
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: none;
+  background: transparent;
   border: none;
-  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: var(--transition);
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.sub-tab-btn svg {
+  stroke: var(--text-secondary);
+  transition: all 0.2s ease;
 }
 
 .sub-tab-btn:hover {
   color: var(--text-primary);
-  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .sub-tab-btn.active {
+  background: var(--primary-gradient);
   color: #ffffff;
-  background-color: var(--primary-color);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 8px rgba(31, 147, 255, 0.35);
+}
+
+.sub-tab-btn.active svg {
+  stroke: #ffffff;
 }
 
 /* CSV Drop Zone */
@@ -4063,6 +4072,196 @@ body.standalone-app-mode .app-footer-bar {
 /* Conversation detail windows: hide entire footer bar completely */
 body.chat-window-mode .app-footer-bar {
   display: none !important;
+}
+
+/* Live Contact Search Dropdown for Novo Chat */
+.form-group.relative-position {
+  position: relative;
+}
+
+.input-with-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.input-with-icon input {
+  width: 100%;
+  padding-right: 32px !important;
+}
+
+.input-icon-right {
+  position: absolute;
+  right: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.contact-search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 500;
+  margin-top: 4px;
+  background: #111827;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px 0;
+  backdrop-filter: blur(14px);
+}
+
+.contact-search-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.contact-search-item:last-child {
+  border-bottom: none;
+}
+
+.contact-search-item:hover {
+  background: rgba(31, 147, 255, 0.15);
+}
+
+.contact-search-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary-gradient);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.contact-search-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.contact-search-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contact-search-detail {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* Segmented Slider Toggle for Novo Chat */
+.new-chat-mode-toggle {
+  display: flex;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.mode-toggle-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.mode-toggle-btn svg {
+  stroke: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.mode-toggle-btn:hover {
+  color: var(--text-primary);
+}
+
+.mode-toggle-btn.active {
+  background: var(--primary-gradient);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(31, 147, 255, 0.35);
+}
+
+.mode-toggle-btn.active svg {
+  stroke: #ffffff;
+}
+
+/* Selected Contact Badge Card */
+.selected-contact-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(52, 211, 153, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  animation: fadeIn 0.15s ease;
+}
+
+.selected-contact-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.selected-contact-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #34d399;
+}
+
+.selected-contact-phone {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.btn-remove-selected {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+
+.btn-remove-selected:hover {
+  color: var(--danger);
+}
+
+.contact-search-detail {
+  font-size: 10.5px;
+  color: var(--text-muted);
 }
 
 /* WhatsApp-style Search Highlights & Banner */
