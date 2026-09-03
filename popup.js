@@ -21,6 +21,7 @@ let availableLabels = [];
 
 // Conversations state
 let activeChatFilter = 'progress';
+let activeSearchCategoryTab = 'all'; // 'all', 'contacts', 'conversations', 'messages'
 let currentActiveChat = null;
 let chatPollInterval = null;
 let fetchedConversations = [];  // Active tab conversations (open or resolved depending on filter)
@@ -145,6 +146,9 @@ const elements = {
 
   // Tab: Conversations
   chatsSearchInput: document.getElementById('chats-search-input'),
+  btnChatsSearchClear: document.getElementById('btn-chats-search-clear'),
+  chatsDefaultFilterBar: document.getElementById('chats-default-filter-bar'),
+  chatsSearchFilterBar: document.getElementById('chats-search-filter-bar'),
   chatsList: document.getElementById('chats-list'),
   chatsListView: document.querySelector('.chats-list-view'),
   
@@ -424,9 +428,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Conversations search input
-  elements.chatsSearchInput.addEventListener('input', () => {
-    filterAndRenderConversations();
-  });
+  if (elements.chatsSearchInput) {
+    elements.chatsSearchInput.addEventListener('input', () => {
+      filterAndRenderConversations();
+    });
+  }
+
+  // Conversations search clear button
+  if (elements.btnChatsSearchClear) {
+    elements.btnChatsSearchClear.addEventListener('click', () => {
+      if (elements.chatsSearchInput) {
+        elements.chatsSearchInput.value = '';
+        activeSearchCategoryTab = 'all';
+        filterAndRenderConversations();
+      }
+    });
+  }
 
   // Chat back button
   elements.btnChatBack.addEventListener('click', closeChatView);
@@ -3124,6 +3141,108 @@ function highlightSearchTerm(text, query) {
 let searchDebounceTimeout = null;
 let apiSearchResults = [];
 let lastSearchQuery = '';
+let currentSearchPage = 1;
+let isLoadingMoreSearch = false;
+let hasMoreSearchResults = true;
+let currentTotalSearchMatches = 0;
+
+async function loadMoreSearchPages(query) {
+  if (!query || isLoadingMoreSearch || !currentAccountId || !hasMoreSearchResults) return;
+  isLoadingMoreSearch = true;
+
+  const btn = document.getElementById('btn-load-more-search');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner" style="width:12px; height:12px; border-width:2px; margin:0 4px 0 0; display:inline-block; vertical-align:middle;"></span> Carregando mais antigas...`;
+  }
+
+  // Multi-container scroll position capture
+  const scrollTargets = [
+    document.querySelector('.app-content'),
+    elements.chatsListView,
+    document.querySelector('#chats'),
+    document.documentElement,
+    document.body
+  ].filter(Boolean);
+
+  const savedPositions = scrollTargets.map(el => ({ el, scrollTop: el.scrollTop }));
+
+  const restoreScroll = () => {
+    savedPositions.forEach(({ el, scrollTop }) => {
+      if (scrollTop > 0) el.scrollTop = scrollTop;
+    });
+  };
+
+  const countBefore = currentTotalSearchMatches;
+
+  try {
+    currentSearchPage++;
+    const qEncoded = encodeURIComponent(query);
+    const pageConvsMap = new Map();
+
+    // 1. Search conversations endpoint page N
+    try {
+      const searchRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/conversations/search?q=${qEncoded}&page=${currentSearchPage}`);
+      const convs = extractConversationsArray(searchRes);
+      convs.forEach(c => { if (c && c.id) pageConvsMap.set(String(c.id), c); });
+    } catch (e) {}
+
+    // 2. Search conversations list endpoint page N with q
+    try {
+      const listRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/conversations?status=all&q=${qEncoded}&page=${currentSearchPage}`);
+      const convs = extractConversationsArray(listRes);
+      convs.forEach(c => { if (c && c.id) pageConvsMap.set(String(c.id), c); });
+    } catch (e) {}
+
+    // 3. Load all conversations list page N
+    try {
+      const allRes = await chatwootFetch(`/api/v1/accounts/${currentAccountId}/conversations?status=all&page=${currentSearchPage}`);
+      const convs = extractConversationsArray(allRes);
+      convs.forEach(c => { if (c && c.id) pageConvsMap.set(String(c.id), c); });
+    } catch (e) {}
+
+    const newConvs = Array.from(pageConvsMap.values());
+    if (newConvs.length > 0) {
+      const existingMap = new Map();
+      apiSearchResults.forEach(c => { if (c && c.id) existingMap.set(String(c.id), c); });
+      newConvs.forEach(c => {
+        if (c && c.id && !existingMap.has(String(c.id))) {
+          existingMap.set(String(c.id), c);
+        }
+      });
+      apiSearchResults = Array.from(existingMap.values());
+
+      filterAndRenderConversations();
+      restoreScroll();
+      requestAnimationFrame(restoreScroll);
+      setTimeout(restoreScroll, 50);
+
+      const countAfter = currentTotalSearchMatches;
+      const actualAdded = countAfter - countBefore;
+
+      if (actualAdded > 0) {
+        showToast(`${actualAdded} ${actualAdded === 1 ? 'nova mensagem adicionada' : 'novas mensagens adicionadas'}.`, 'success');
+      } else {
+        hasMoreSearchResults = false;
+        showToast('Você chegou ao fim da lista. Não há mais mensagens para carregar.', 'info');
+        filterAndRenderConversations();
+        restoreScroll();
+      }
+    } else {
+      hasMoreSearchResults = false;
+      showToast('Você chegou ao fim da lista. Não há mais mensagens para carregar.', 'info');
+      filterAndRenderConversations();
+      restoreScroll();
+    }
+  } catch (err) {
+    console.error('Error loading more search pages:', err);
+    showToast('Erro ao carregar mensagens antigas.', 'danger');
+  } finally {
+    isLoadingMoreSearch = false;
+    restoreScroll();
+    requestAnimationFrame(restoreScroll);
+  }
+}
 
 async function performApiSearch(query) {
   if (!query || query.length < 2 || !currentAccountId) return [];
@@ -3201,27 +3320,41 @@ function filterAndRenderConversations() {
     if (!normalizedQuery) {
       apiSearchResults = [];
       lastSearchQuery = '';
+      currentSearchPage = 1;
+      hasMoreSearchResults = true;
+      if (elements.btnChatsSearchClear) elements.btnChatsSearchClear.classList.add('hidden');
+      if (elements.chatsDefaultFilterBar) elements.chatsDefaultFilterBar.classList.remove('hidden');
+      if (elements.chatsSearchFilterBar) elements.chatsSearchFilterBar.classList.add('hidden');
+      activeSearchCategoryTab = 'all';
+
       sourceConversations.forEach(item => { if (item) delete item._searchMatch; });
       renderConversationsList(sourceConversations, currentAccountId, '');
       return;
     }
 
-    // Merge all available conversation sources for deep search
+    if (normalizedQuery !== lastSearchQuery) {
+      hasMoreSearchResults = true;
+    }
+
+    // Show clear button & search filter category tabs bar
+    if (elements.btnChatsSearchClear) elements.btnChatsSearchClear.classList.remove('hidden');
+    if (elements.chatsDefaultFilterBar) elements.chatsDefaultFilterBar.classList.add('hidden');
+    if (elements.chatsSearchFilterBar) elements.chatsSearchFilterBar.classList.remove('hidden');
+
+    // Merge all available conversation sources for deep search across ALL conversations (open and resolved)
     const mergedMap = new Map();
     [...openConversationsCache, ...fetchedConversations, ...apiSearchResults].forEach(item => {
       if (item && item.id) {
-        // Respect tab filter unless explicit search match
-        const matchesFilter = activeChatFilter === 'resolved' ? item.status === 'resolved' : item.status !== 'resolved';
-        if (matchesFilter) {
-          mergedMap.set(String(item.id), item);
-        }
+        mergedMap.set(String(item.id), item);
       }
     });
 
     const combinedList = Array.from(mergedMap.values());
 
-    // WhatsApp-style Multi-Level Deep Search with Accent Insensitivity
-    const filtered = [];
+    const contactsMatches = [];
+    const conversationsMatches = [];
+    const messagesMatches = [];
+
     combinedList.forEach(item => {
       if (!item) return;
 
@@ -3229,12 +3362,14 @@ function filterAndRenderConversations() {
       const contactPhone = normalizeSearchString(item.meta?.sender?.phone_number);
       const contactEmail = normalizeSearchString(item.meta?.sender?.email);
       const channelName = normalizeSearchString(item.inbox?.name || item.meta?.channel);
+      const convIdStr = normalizeSearchString(item.id);
       const lastNonActMsg = normalizeSearchString(item.last_non_activity_message?.content);
 
       const nameMatch = contactName.includes(normalizedQuery);
       const phoneMatch = contactPhone.includes(normalizedQuery);
       const emailMatch = contactEmail.includes(normalizedQuery);
       const channelMatch = channelName.includes(normalizedQuery);
+      const idMatch = convIdStr.includes(normalizedQuery) || (`#${convIdStr}`).includes(normalizedQuery);
       const lastMsgMatch = lastNonActMsg.includes(normalizedQuery);
 
       let matchingMsgContent = null;
@@ -3255,18 +3390,55 @@ function filterAndRenderConversations() {
         }
       }
 
-      if (nameMatch || phoneMatch || emailMatch || channelMatch || lastMsgMatch || matchingMsgContent) {
-        const clonedItem = Object.assign({}, item);
-        if (matchingMsgContent) {
-          clonedItem._searchMatch = { type: 'message', content: matchingMsgContent };
-        } else {
-          clonedItem._searchMatch = { type: 'contact' };
-        }
-        filtered.push(clonedItem);
+      if (nameMatch || phoneMatch || emailMatch || idMatch || channelMatch) {
+        const cloned = Object.assign({}, item, { _searchMatch: { type: 'contact' } });
+        contactsMatches.push(cloned);
+      }
+
+      if (matchingMsgContent) {
+        const cloned = Object.assign({}, item, { _searchMatch: { type: 'message', content: matchingMsgContent } });
+        messagesMatches.push(cloned);
       }
     });
 
-    renderConversationsList(filtered, currentAccountId, rawQuery.trim());
+    const cCount = contactsMatches.length;
+    const mCount = messagesMatches.length;
+    const totalCount = cCount + mCount;
+    currentTotalSearchMatches = totalCount;
+
+    // Render Search Category Chips (Todos, Contatos, Mensagens)
+    if (elements.chatsSearchFilterBar) {
+      elements.chatsSearchFilterBar.innerHTML = `
+        <button type="button" class="search-category-chip ${activeSearchCategoryTab === 'all' ? 'active' : ''}" data-category="all">
+          Todos <span class="search-category-count">(${totalCount})</span>
+        </button>
+        <button type="button" class="search-category-chip ${activeSearchCategoryTab === 'contacts' ? 'active' : ''}" data-category="contacts">
+          Contatos <span class="search-category-count">(${cCount})</span>
+        </button>
+        <button type="button" class="search-category-chip ${activeSearchCategoryTab === 'messages' ? 'active' : ''}" data-category="messages">
+          Mensagens <span class="search-category-count">(${mCount})</span>
+        </button>
+      `;
+
+      elements.chatsSearchFilterBar.querySelectorAll('.search-category-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          activeSearchCategoryTab = chip.getAttribute('data-category') || 'all';
+          filterAndRenderConversations();
+        });
+      });
+    }
+
+    if (activeSearchCategoryTab === 'contacts') {
+      renderConversationsList(contactsMatches, currentAccountId, rawQuery.trim());
+    } else if (activeSearchCategoryTab === 'messages') {
+      renderConversationsList(messagesMatches, currentAccountId, rawQuery.trim());
+    } else {
+      renderConversationsList({
+        isCategorized: true,
+        contacts: contactsMatches,
+        messages: messagesMatches
+      }, currentAccountId, rawQuery.trim());
+    }
 
     // Trigger API search in background if query changed
     if (normalizedQuery.length >= 2 && normalizedQuery !== lastSearchQuery) {
@@ -3324,10 +3496,79 @@ function getCurrentlyOpenConversationIds() {
   });
 }
 
-async function renderConversationsList(conversations, accountId, searchQuery = '') {
+function createConversationCardElement(item, accountId, searchQuery, openIds) {
+  const strId = String(item.id);
+  const isOpenWindow = openIds && openIds.has(strId);
+  if (isOpenWindow) {
+    item.unread_count = 0;
+  }
+
+  const contactName = item.meta?.sender?.name || 'Cliente';
+  const avatarUrl = getSenderAvatarUrl(item.meta?.sender || item.sender);
+  const avatarContent = getAvatarContent(contactName, avatarUrl);
+  
+  const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
+  let lastMsgText = 'Nova conversa criada';
+  let isMatchSnippet = false;
+
+  if (item._searchMatch && item._searchMatch.type === 'message' && item._searchMatch.content) {
+    lastMsgText = `💬 "${item._searchMatch.content}"`;
+    isMatchSnippet = true;
+  } else if (lastMsgObj) {
+    lastMsgText = lastMsgObj.content || 'Nova mensagem (mídia/anexo)';
+  }
+
+  const timestamp = item.last_activity_at || item.timestamp;
+  const timeStr = timestamp ? formatRelativeTime(timestamp * 1000) : '';
+  const isUnread = !isOpenWindow && item.unread_count > 0;
+
+  let itemClass = 'chat-item';
+  if (isOpenWindow) {
+    itemClass += ' window-active';
+  } else if (isUnread) {
+    itemClass += ' unread';
+  }
+
+  const badgeHtml = isOpenWindow 
+    ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
+    : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
+
+  const phoneNumber = item.meta?.sender?.phone_number || item.meta?.sender?.identifier || '';
+  const displayNameHtml = searchQuery ? highlightSearchTerm(contactName, searchQuery) : escapeHtml(contactName);
+  const displayPhoneHtml = searchQuery && phoneNumber ? highlightSearchTerm(phoneNumber, searchQuery) : escapeHtml(phoneNumber);
+  const displayMsgHtml = searchQuery ? highlightSearchTerm(lastMsgText, searchQuery) : escapeHtml(lastMsgText);
+
+  const card = document.createElement('div');
+  card.className = itemClass;
+  card.setAttribute('data-id', strId);
+  card.innerHTML = `
+    <div class="chat-item-avatar">${avatarContent}</div>
+    <div class="chat-item-content">
+      <div class="chat-item-top">
+        <span class="chat-item-name">${displayNameHtml}</span>
+        <span class="chat-item-time">${timeStr}</span>
+      </div>
+      ${phoneNumber ? `<div class="chat-item-phone">${displayPhoneHtml}</div>` : ''}
+      <div class="chat-item-bottom">
+        <span class="chat-item-msg ${isMatchSnippet ? 'matching-msg' : ''}">${displayMsgHtml}</span>
+        <div class="chat-item-meta">
+          <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
+          ${badgeHtml}
+        </div>
+      </div>
+    </div>
+  `;
+
+  card.addEventListener('click', () => {
+    openConversationInWindow(item.id, contactName, accountId, item.inbox_id);
+  });
+
+  return card;
+}
+
+async function renderConversationsList(data, accountId, searchQuery = '') {
   try {
     if (!elements.chatsList) return;
-    const safeConversations = (Array.isArray(conversations) ? conversations : []).filter(c => c && c.id);
 
     // Search results banner
     let bannerEl = elements.chatsList.parentElement ? elements.chatsList.parentElement.querySelector('.search-results-banner') : null;
@@ -3335,7 +3576,6 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
       const bannerHtml = `
         <div class="search-results-banner">
           <span>🔍 "${escapeHtml(searchQuery)}"</span>
-          <span>${safeConversations.length} ${safeConversations.length === 1 ? 'conversa' : 'conversas'}</span>
         </div>
       `;
       if (bannerEl) {
@@ -3347,6 +3587,84 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
       bannerEl.remove();
     }
 
+    // Categorized layout for 'Todos' tab
+    if (data && data.isCategorized) {
+      const { contacts = [], messages = [] } = data;
+      const totalMatches = contacts.length + messages.length;
+
+      if (totalMatches === 0) {
+        elements.chatsList.innerHTML = `
+          <div class="empty-state">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            <h3>Nenhum resultado encontrado</h3>
+            <p>Não foram encontrados resultados contendo "${escapeHtml(searchQuery)}".</p>
+          </div>
+        `;
+        return;
+      }
+
+      elements.chatsList.innerHTML = '';
+
+      let openIds = new Set();
+      try { openIds = await getCurrentlyOpenConversationIds(); } catch (e) {}
+
+      // Contatos Section
+      if (contacts.length > 0) {
+        const sectionGroup = document.createElement('div');
+        sectionGroup.className = 'search-section-group';
+        sectionGroup.innerHTML = `
+          <div class="search-section-header">
+            <div class="search-section-title-wrap">
+              <span class="search-section-arrow">▼</span>
+              <span>Contatos (${contacts.length})</span>
+            </div>
+          </div>
+          <div class="search-section-items"></div>
+        `;
+        const itemsContainer = sectionGroup.querySelector('.search-section-items');
+        contacts.forEach(item => {
+          itemsContainer.appendChild(createConversationCardElement(item, accountId, searchQuery, openIds));
+        });
+        sectionGroup.querySelector('.search-section-header').addEventListener('click', () => {
+          sectionGroup.classList.toggle('collapsed');
+        });
+        elements.chatsList.appendChild(sectionGroup);
+      }
+
+      // Mensagens Section
+      if (messages.length > 0) {
+        const sectionGroup = document.createElement('div');
+        sectionGroup.className = 'search-section-group';
+        sectionGroup.innerHTML = `
+          <div class="search-section-header">
+            <div class="search-section-title-wrap">
+              <span class="search-section-arrow">▼</span>
+              <span>Mensagens (${messages.length})</span>
+            </div>
+          </div>
+          <div class="search-section-items"></div>
+        `;
+        const itemsContainer = sectionGroup.querySelector('.search-section-items');
+        messages.forEach(item => {
+          itemsContainer.appendChild(createConversationCardElement(item, accountId, searchQuery, openIds));
+        });
+        sectionGroup.querySelector('.search-section-header').addEventListener('click', () => {
+          sectionGroup.classList.toggle('collapsed');
+        });
+        elements.chatsList.appendChild(sectionGroup);
+      }
+
+      appendLoadMoreSearchButton(searchQuery);
+
+      if (typeof updateUnreadBadgeLocal === 'function') updateUnreadBadgeLocal();
+      if (typeof resolveInboxNames === 'function') resolveInboxNames();
+      return;
+    }
+
+    // Single array list rendering (individual tab selected or default list)
+    const conversations = Array.isArray(data) ? data : [];
+    const safeConversations = conversations.filter(c => c && c.id);
+
     if (safeConversations.length === 0) {
       elements.chatsList.innerHTML = `
         <div class="empty-state">
@@ -3355,21 +3673,20 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
           <p>${searchQuery ? `Não foram encontradas conversas ou mensagens contendo "${escapeHtml(searchQuery)}".` : 'Não há conversas abertas correspondentes ao filtro atual.'}</p>
         </div>
       `;
+      appendLoadMoreSearchButton(searchQuery);
       return;
     }
 
     let openIds = new Set();
-    try {
-      openIds = await getCurrentlyOpenConversationIds();
-    } catch (e) {}
+    try { openIds = await getCurrentlyOpenConversationIds(); } catch (e) {}
 
     const validIds = new Set(safeConversations.map(c => String(c.id)));
 
     // Clean up loading indicators, empty states, or non-chat-item elements
     Array.from(elements.chatsList.children).forEach(child => {
-      if (!child.classList.contains('chat-item')) {
+      if (!child.classList.contains('chat-item') && !child.classList.contains('search-load-more-container')) {
         child.remove();
-      } else {
+      } else if (child.classList.contains('chat-item')) {
         const cardId = child.getAttribute('data-id');
         if (cardId && !validIds.has(cardId)) {
           child.remove();
@@ -3378,142 +3695,54 @@ async function renderConversationsList(conversations, accountId, searchQuery = '
     });
 
     safeConversations.forEach(item => {
-      if (!item || !item.id) return;
-
+      const card = createConversationCardElement(item, accountId, searchQuery, openIds);
       const strId = String(item.id);
-      const isOpenWindow = openIds && openIds.has(strId);
-
-      if (isOpenWindow) {
-        item.unread_count = 0; // Force 0 unread when open in window
-      }
-
-      const contactName = item.meta?.sender?.name || 'Cliente';
-      const avatarUrl = getSenderAvatarUrl(item.meta?.sender || item.sender);
-      const avatarContent = getAvatarContent(contactName, avatarUrl);
-      
-      const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
-      let lastMsgText = 'Nova conversa criada';
-      let isMatchSnippet = false;
-
-      if (item._searchMatch && item._searchMatch.type === 'message' && item._searchMatch.content) {
-        lastMsgText = `💬 "${item._searchMatch.content}"`;
-        isMatchSnippet = true;
-      } else if (lastMsgObj) {
-        lastMsgText = lastMsgObj.content || 'Nova mensagem (mídia/anexo)';
-      }
-
-      const timestamp = item.last_activity_at || item.timestamp;
-      const timeStr = timestamp ? formatRelativeTime(timestamp * 1000) : '';
-
-      const isUnread = !isOpenWindow && item.unread_count > 0;
-
-      let itemClass = 'chat-item';
-      if (isOpenWindow) {
-        itemClass += ' window-active';
-      } else if (isUnread) {
-        itemClass += ' unread';
-      }
-
-      const badgeHtml = isOpenWindow 
-        ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
-        : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
-
-      const phoneNumber = item.meta?.sender?.phone_number || item.meta?.sender?.identifier || '';
-      const displayNameHtml = searchQuery ? highlightSearchTerm(contactName, searchQuery) : escapeHtml(contactName);
-      const displayPhoneHtml = searchQuery && phoneNumber ? highlightSearchTerm(phoneNumber, searchQuery) : escapeHtml(phoneNumber);
-      const displayMsgHtml = searchQuery ? highlightSearchTerm(lastMsgText, searchQuery) : escapeHtml(lastMsgText);
-
       const existingCard = elements.chatsList.querySelector(`[data-id="${strId}"]`);
-
       if (existingCard) {
-        // SMOOTH IN-PLACE DOM RECONCILIATION (NO FLICKER)
-        if (existingCard.className !== itemClass) {
-          existingCard.className = itemClass;
-        }
-
-        const nameEl = existingCard.querySelector('.chat-item-name');
-        if (nameEl) nameEl.innerHTML = displayNameHtml;
-
-        const timeEl = existingCard.querySelector('.chat-item-time');
-        if (timeEl && timeEl.textContent !== timeStr) timeEl.textContent = timeStr;
-
-        let phoneEl = existingCard.querySelector('.chat-item-phone');
-        if (phoneNumber) {
-          if (!phoneEl) {
-            phoneEl = document.createElement('div');
-            phoneEl.className = 'chat-item-phone';
-            const topEl = existingCard.querySelector('.chat-item-top');
-            if (topEl) topEl.insertAdjacentElement('afterend', phoneEl);
-          }
-          phoneEl.innerHTML = displayPhoneHtml;
-        } else if (phoneEl) {
-          phoneEl.remove();
-        }
-
-        const msgEl = existingCard.querySelector('.chat-item-msg');
-        if (msgEl) {
-          msgEl.innerHTML = displayMsgHtml;
-          if (isMatchSnippet) {
-            msgEl.classList.add('matching-msg');
-          } else {
-            msgEl.classList.remove('matching-msg');
-          }
-        }
-
-        const metaEl = existingCard.querySelector('.chat-item-meta');
-        if (metaEl) {
-          const oldBadge = metaEl.querySelector('.chat-item-open-tag, .chat-item-badge');
-          const tempContainer = document.createElement('div');
-          tempContainer.innerHTML = badgeHtml;
-          const newBadge = tempContainer.firstElementChild;
-
-          if (oldBadge) {
-            if (newBadge) {
-              if (oldBadge.outerHTML !== newBadge.outerHTML) {
-                oldBadge.replaceWith(newBadge);
-              }
-            } else {
-              oldBadge.remove();
-            }
-          } else if (newBadge) {
-            metaEl.appendChild(newBadge);
-          }
-        }
+        existingCard.replaceWith(card);
       } else {
-        // Create new card if not existing
-        const card = document.createElement('div');
-        card.className = itemClass;
-        card.setAttribute('data-id', strId);
-        card.innerHTML = `
-          <div class="chat-item-avatar">${avatarContent}</div>
-          <div class="chat-item-content">
-            <div class="chat-item-top">
-              <span class="chat-item-name">${displayNameHtml}</span>
-              <span class="chat-item-time">${timeStr}</span>
-            </div>
-            ${phoneNumber ? `<div class="chat-item-phone">${displayPhoneHtml}</div>` : ''}
-            <div class="chat-item-bottom">
-              <span class="chat-item-msg ${isMatchSnippet ? 'matching-msg' : ''}">${displayMsgHtml}</span>
-              <div class="chat-item-meta">
-                <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
-                ${badgeHtml}
-              </div>
-            </div>
-          </div>
-        `;
-
-        card.addEventListener('click', () => {
-          openConversationInWindow(item.id, contactName, accountId, item.inbox_id);
-        });
-
         elements.chatsList.appendChild(card);
       }
     });
+
+    appendLoadMoreSearchButton(searchQuery);
 
     if (typeof updateUnreadBadgeLocal === 'function') updateUnreadBadgeLocal();
     if (typeof resolveInboxNames === 'function') resolveInboxNames();
   } catch (err) {
     console.error('Error rendering conversations list:', err);
+  }
+}
+
+function appendLoadMoreSearchButton(searchQuery) {
+  if (!elements.chatsList) return;
+  const existingWrapper = elements.chatsList.querySelector('.search-load-more-container');
+
+  if (!searchQuery || !hasMoreSearchResults) {
+    if (existingWrapper) existingWrapper.remove();
+    return;
+  }
+
+  if (!existingWrapper) {
+    const loadMoreWrapper = document.createElement('div');
+    loadMoreWrapper.className = 'search-load-more-container';
+    loadMoreWrapper.style.cssText = 'text-align: center; margin: 16px 0 12px 0; width: 100%;';
+    loadMoreWrapper.innerHTML = `
+      <button type="button" id="btn-load-more-search" class="btn btn-secondary btn-sm" style="font-size: 11.5px; padding: 6px 14px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin: 0 auto; border-radius: 20px;">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+        Carregar mensagens mais antigas
+      </button>
+    `;
+    elements.chatsList.appendChild(loadMoreWrapper);
+
+    const btnLoadMore = loadMoreWrapper.querySelector('#btn-load-more-search');
+    if (btnLoadMore) {
+      btnLoadMore.addEventListener('click', () => {
+        loadMoreSearchPages(searchQuery);
+      });
+    }
+  } else {
+    elements.chatsList.appendChild(existingWrapper);
   }
 }
 

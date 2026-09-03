@@ -61,14 +61,20 @@
           <div class="search-box">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <input type="text" id="chats-search-input" placeholder="Buscar contatos ou mensagens...">
+            <button type="button" id="btn-chats-search-clear" class="search-clear-btn hidden" title="Limpar busca">&times;</button>
           </div>
           
-          <div class="chats-filter-bar">
+          <div class="chats-filter-bar" id="chats-default-filter-bar">
             <button class="filter-chip active" data-filter="progress" id="btn-filter-progress">
               Em Atendimento
               <span class="filter-badge hidden" id="badge-filter-progress">0</span>
             </button>
             <button class="filter-chip" data-filter="resolved" id="btn-filter-resolved">Concluídas</button>
+          </div>
+
+          <!-- Dynamic Search Category Tabs (Chatwoot style) -->
+          <div class="chats-search-filter-bar hidden" id="chats-search-filter-bar">
+            <!-- Dynamically populated buttons e.g.: All Results, Contacts (1), Conversations (1), Messages (5) -->
           </div>
 
           <div class="chats-container" id="chats-list">
