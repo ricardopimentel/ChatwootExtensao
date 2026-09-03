@@ -63,15 +63,17 @@ async function getSettingsFromStorage() {
       const syncData = syncRes?.chatwootSettings;
       chrome.storage.local.get(['chatwootSettings'], (localRes) => {
         const localData = localRes?.chatwootSettings;
+        let finalConfig = null;
         if (syncData && syncData.url && syncData.token) {
+          finalConfig = syncData;
           chrome.storage.local.set({ chatwootSettings: syncData });
-          return resolve(syncData);
-        }
-        if (localData && localData.url && localData.token) {
+        } else if (localData && localData.url && localData.token) {
+          finalConfig = localData;
           chrome.storage.sync.set({ chatwootSettings: localData });
-          return resolve(localData);
+        } else {
+          finalConfig = syncData || localData || null;
         }
-        resolve(syncData || localData || null);
+        resolve(finalConfig);
       });
     });
   });
@@ -79,23 +81,46 @@ async function getSettingsFromStorage() {
 
 async function getRemindersFromStorage() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['chatwootReminders'], (syncRes) => {
-      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : null;
+    chrome.storage.sync.get(null, (syncRes) => {
+      const syncItemsMap = new Map();
+
+      if (Array.isArray(syncRes?.chatwootReminders)) {
+        syncRes.chatwootReminders.forEach(item => {
+          if (item && item.id) syncItemsMap.set(String(item.id), item);
+        });
+      }
+
+      if (syncRes) {
+        Object.keys(syncRes).forEach(key => {
+          if (key.startsWith('rem_')) {
+            const item = syncRes[key];
+            if (item && item.id) syncItemsMap.set(String(item.id), item);
+          }
+        });
+      }
+
       chrome.storage.local.get(['chatwootReminders'], (localRes) => {
         const localList = Array.isArray(localRes?.chatwootReminders) ? localRes.chatwootReminders : [];
-        let mergedList = [];
-        if (syncList && syncList.length > 0) {
-          const map = new Map();
-          localList.forEach(item => item && item.id && map.set(String(item.id), item));
-          syncList.forEach(item => item && item.id && map.set(String(item.id), item));
-          mergedList = Array.from(map.values());
-        } else {
-          mergedList = localList;
-        }
-        if (mergedList.length > 0) {
-          chrome.storage.sync.set({ chatwootReminders: mergedList });
-          chrome.storage.local.set({ chatwootReminders: mergedList });
-        }
+        const mergedMap = new Map();
+
+        localList.forEach(item => {
+          if (item && item.id) mergedMap.set(String(item.id), item);
+        });
+
+        syncItemsMap.forEach((syncItem, id) => {
+          const localItem = mergedMap.get(id);
+          if (!localItem) {
+            mergedMap.set(id, syncItem);
+          } else {
+            const syncTime = syncItem.savedAt || 0;
+            const localTime = localItem.savedAt || 0;
+            if (syncTime >= localTime) {
+              mergedMap.set(id, syncItem);
+            }
+          }
+        });
+
+        const mergedList = Array.from(mergedMap.values());
         resolve(mergedList);
       });
     });

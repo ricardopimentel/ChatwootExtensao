@@ -28,13 +28,22 @@
   padding: 0;
 }
 
+html, body {
+  overflow: hidden !important;
+  max-height: 600px;
+}
+
+body.standalone-app-mode,
+body.chat-window-mode {
+  max-height: none !important;
+}
+
 body {
   font-family: var(--font-family);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   width: 420px;
   height: 560px;
-  overflow: hidden;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
@@ -44,11 +53,10 @@ body {
   flex-direction: column;
   height: 100%;
   position: relative;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
-/* Header (First part - scrolls away naturally) */
+/* Header (First part - scrolls away naturally with app-content) */
 .app-header {
   position: relative;
   display: flex;
@@ -229,10 +237,15 @@ body {
 /* Content Area */
 .app-content {
   flex: 1;
-  overflow: visible;
-  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
   position: relative;
   z-index: 1;
+}
+
+.tab-pane {
+  padding: 16px 16px 36px 16px;
 }
 
 /* Custom Scrollbar on app-container */
@@ -3979,32 +3992,77 @@ body.chat-window-mode #btn-reminder-back-to-chat {
 .bulk-log-item.error { color: var(--danger); }
 .bulk-log-item.info { color: var(--text-primary); }
 
-/* Thin Bottom Footer Bar (Dark Blue Frosted Glass / Glassmorphism) */
+/* Thin Bottom Footer Bar (Matching Header Frosted Glass Translucency with Drag-to-Resize) */
 .app-footer-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
   width: 100%;
-  height: 24px;
-  min-height: 24px;
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.85) 0%, rgba(9, 31, 79, 0.8) 100%);
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  height: 28px;
+  min-height: 28px;
+  background: rgba(11, 15, 25, 0.45) !important;
+  backdrop-filter: blur(14px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(180%) !important;
   color: rgba(248, 250, 252, 0.9);
   font-size: 10px;
   font-weight: 600;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1px;
+  padding: 2px 0 3px 0;
   letter-spacing: 0.5px;
-  border-top: 1px solid rgba(59, 130, 246, 0.25);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 -4px 20px rgba(0, 0, 0, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
   user-select: none;
   flex-shrink: 0;
-  z-index: 100;
+  z-index: 1000;
   box-sizing: border-box;
+  cursor: ns-resize;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
+.footer-resize-grip {
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background-color: var(--text-muted);
+  opacity: 0.6;
+  transition: all 0.2s ease;
+}
+
+.app-footer-bar:hover,
+.app-footer-bar.resizing {
+  background: rgba(15, 23, 42, 0.75) !important;
+  border-top-color: rgba(96, 165, 250, 0.5);
+}
+
+.app-footer-bar:hover .footer-resize-grip,
+.app-footer-bar.resizing .footer-resize-grip {
+  opacity: 1;
+  background-color: #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.8);
+  width: 44px;
+}
+
+/* Standalone full-app window mode: keep footer text, hide resize grip handle */
+body.standalone-app-mode .footer-resize-grip {
+  display: none !important;
+}
+
+body.standalone-app-mode .app-footer-bar {
+  cursor: default !important;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+}
+
+/* Conversation detail windows: hide entire footer bar completely */
 body.chat-window-mode .app-footer-bar {
-  display: none;
+  display: none !important;
 }
 
 /* WhatsApp-style Search Highlights & Banner */

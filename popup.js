@@ -246,6 +246,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
     }
 
+    initPopupResizeHandler();
+
     // Setup tab navigation & event listeners first
     setupTabs();
     setupSettingsHandlers();
@@ -280,6 +282,69 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
     });
+
+    // Drag to Resize Extension Popup Height Handler
+    function initPopupResizeHandler() {
+      const footer = document.getElementById('app-footer-bar');
+      if (!footer) return;
+
+      const isWindowMode = document.body.classList.contains('standalone-app-mode') || document.body.classList.contains('chat-window-mode');
+      const maxAllowedHeight = isWindowMode ? Math.min(950, (window.screen?.availHeight || 900) - 60) : 600;
+
+      chrome.storage.local.get(['popupCustomHeight'], (res) => {
+        if (res && res.popupCustomHeight) {
+          const savedH = parseInt(res.popupCustomHeight, 10);
+          if (!isNaN(savedH) && savedH >= 480) {
+            const clampedH = Math.min(maxAllowedHeight, Math.max(480, savedH));
+            document.body.style.height = `${clampedH}px`;
+            document.documentElement.style.height = `${clampedH}px`;
+          }
+        }
+      });
+
+      let isDragging = false;
+      let startY = 0;
+      let startH = 0;
+
+      footer.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        const currentIsWindowMode = document.body.classList.contains('standalone-app-mode') || document.body.classList.contains('chat-window-mode');
+        if (currentIsWindowMode) return;
+        e.preventDefault();
+
+        isDragging = true;
+        startY = e.clientY;
+        startH = document.body.offsetHeight || window.innerHeight || 560;
+        footer.classList.add('resizing');
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (moveEvent) => {
+          if (!isDragging) return;
+          const deltaY = moveEvent.clientY - startY;
+          const newHeight = Math.max(480, Math.min(maxAllowedHeight, startH + deltaY));
+          document.body.style.height = `${newHeight}px`;
+          document.documentElement.style.height = `${newHeight}px`;
+        };
+
+        const onMouseUp = () => {
+          if (!isDragging) return;
+          isDragging = false;
+          footer.classList.remove('resizing');
+          document.body.style.userSelect = '';
+
+          window.removeEventListener('mousemove', onMouseMove);
+          window.removeEventListener('mouseup', onMouseUp);
+
+          const finalH = Math.min(maxAllowedHeight, Math.max(480, document.body.offsetHeight || parseInt(document.body.style.height, 10)));
+          if (!isNaN(finalH)) {
+            chrome.storage.local.set({ popupCustomHeight: finalH });
+          }
+        };
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+      });
+    }
 
     // Real-time WebSocket and interaction event listener
     chrome.runtime.onMessage.addListener((message) => {
@@ -847,15 +912,17 @@ async function getSettingsFromStorage() {
       const syncData = syncRes?.chatwootSettings;
       chrome.storage.local.get(['chatwootSettings'], (localRes) => {
         const localData = localRes?.chatwootSettings;
+        let finalConfig = null;
         if (syncData && syncData.url && syncData.token) {
+          finalConfig = syncData;
           chrome.storage.local.set({ chatwootSettings: syncData });
-          return resolve(syncData);
-        }
-        if (localData && localData.url && localData.token) {
+        } else if (localData && localData.url && localData.token) {
+          finalConfig = localData;
           chrome.storage.sync.set({ chatwootSettings: localData });
-          return resolve(localData);
+        } else {
+          finalConfig = syncData || localData || null;
         }
-        resolve(syncData || localData || null);
+        resolve(finalConfig);
       });
     });
   });
@@ -865,6 +932,9 @@ async function saveSettingsToStorage(newConfig) {
   return new Promise((resolve) => {
     isSelfSavingStorage = true;
     chrome.storage.sync.set({ chatwootSettings: newConfig }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn('[Storage] Sync settings save notice:', chrome.runtime.lastError.message);
+      }
       chrome.storage.local.set({ chatwootSettings: newConfig }, () => {
         setTimeout(() => { isSelfSavingStorage = false; }, 400);
         resolve();
@@ -875,23 +945,46 @@ async function saveSettingsToStorage(newConfig) {
 
 async function getRemindersFromStorage() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['chatwootReminders'], (syncRes) => {
-      const syncList = Array.isArray(syncRes?.chatwootReminders) ? syncRes.chatwootReminders : null;
+    chrome.storage.sync.get(null, (syncRes) => {
+      const syncItemsMap = new Map();
+
+      if (Array.isArray(syncRes?.chatwootReminders)) {
+        syncRes.chatwootReminders.forEach(item => {
+          if (item && item.id) syncItemsMap.set(String(item.id), item);
+        });
+      }
+
+      if (syncRes) {
+        Object.keys(syncRes).forEach(key => {
+          if (key.startsWith('rem_')) {
+            const item = syncRes[key];
+            if (item && item.id) syncItemsMap.set(String(item.id), item);
+          }
+        });
+      }
+
       chrome.storage.local.get(['chatwootReminders'], (localRes) => {
         const localList = Array.isArray(localRes?.chatwootReminders) ? localRes.chatwootReminders : [];
-        let mergedList = [];
-        if (syncList && syncList.length > 0) {
-          const map = new Map();
-          localList.forEach(item => item && item.id && map.set(String(item.id), item));
-          syncList.forEach(item => item && item.id && map.set(String(item.id), item));
-          mergedList = Array.from(map.values());
-        } else {
-          mergedList = localList;
-        }
-        if (mergedList.length > 0) {
-          chrome.storage.sync.set({ chatwootReminders: mergedList });
-          chrome.storage.local.set({ chatwootReminders: mergedList });
-        }
+        const mergedMap = new Map();
+
+        localList.forEach(item => {
+          if (item && item.id) mergedMap.set(String(item.id), item);
+        });
+
+        syncItemsMap.forEach((syncItem, id) => {
+          const localItem = mergedMap.get(id);
+          if (!localItem) {
+            mergedMap.set(id, syncItem);
+          } else {
+            const syncTime = syncItem.savedAt || 0;
+            const localTime = localItem.savedAt || 0;
+            if (syncTime >= localTime) {
+              mergedMap.set(id, syncItem);
+            }
+          }
+        });
+
+        const mergedList = Array.from(mergedMap.values());
         resolve(mergedList);
       });
     });
@@ -915,13 +1008,32 @@ async function saveRemindersToStorage(list) {
       savedAt: item.savedAt || Date.now()
     }));
 
-    chrome.storage.sync.set({ chatwootReminders: sanitized }, () => {
-      if (chrome.runtime.lastError) {
-        console.warn('[Chatwoot Storage] Sync reminders save notice:', chrome.runtime.lastError.message);
-      }
-      chrome.storage.local.set({ chatwootReminders: sanitized }, () => {
-        setTimeout(() => { isSelfSavingStorage = false; }, 400);
-        resolve(sanitized);
+    chrome.storage.local.set({ chatwootReminders: sanitized }, () => {
+      chrome.storage.sync.get(null, (existingSync) => {
+        const currentSyncKeys = existingSync ? Object.keys(existingSync) : [];
+        const newIds = new Set(sanitized.map(i => String(i.id)));
+        const keysToRemove = currentSyncKeys.filter(k => k.startsWith('rem_') && !newIds.has(k.replace('rem_', '')));
+
+        if (keysToRemove.length > 0) {
+          chrome.storage.sync.remove(keysToRemove);
+        }
+
+        const syncPayload = {
+          chatwootReminders: sanitized,
+          chatwootReminderIndex: Array.from(newIds)
+        };
+
+        sanitized.forEach(item => {
+          syncPayload[`rem_${item.id}`] = item;
+        });
+
+        chrome.storage.sync.set(syncPayload, () => {
+          if (chrome.runtime.lastError) {
+            console.warn('[Storage] Sync reminders save notice:', chrome.runtime.lastError.message);
+          }
+          setTimeout(() => { isSelfSavingStorage = false; }, 400);
+          resolve(sanitized);
+        });
       });
     });
   });
@@ -1636,18 +1748,7 @@ async function handleSaveCurrentSubmit(e) {
     chrome.alarms.create(reminder.id, { when: alarmTime });
   }
 
-  // Post private note to Chatwoot conversation for server-side persistence across PCs
-  if (currentTabInfo.accountId && currentTabInfo.conversationId) {
-    chatwootFetch(`/api/v1/accounts/${currentTabInfo.accountId}/conversations/${currentTabInfo.conversationId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({
-        content: `📌 [Lembrete Extensão] ${title}${notes ? '\nNotas: ' + notes : ''}`,
-        private: true
-      })
-    }).catch(err => console.warn('Could not post private note to Chatwoot:', err));
-  }
-
-  showToast('Lembrete salvo e sincronizado!', 'success');
+  showToast('Lembrete salvo e sincronizado na conta Google!', 'success');
   
   // Reset form
   elements.saveNotes.value = '';
@@ -2836,21 +2937,33 @@ async function getInboxName(accountId, inboxId) {
   return '';
 }
 
+const INBOX_PALETTE = [
+  { text: '#34d399', bg: 'rgba(52, 211, 153, 0.22)', border: 'rgba(52, 211, 153, 0.55)' }, // Emerald Green
+  { text: '#c084fc', bg: 'rgba(192, 132, 252, 0.22)', border: 'rgba(192, 132, 252, 0.55)' }, // Electric Purple
+  { text: '#fbbf24', bg: 'rgba(251, 191, 36, 0.22)', border: 'rgba(251, 191, 36, 0.55)' }, // Amber Gold
+  { text: '#38bdf8', bg: 'rgba(56, 189, 248, 0.22)', border: 'rgba(56, 189, 248, 0.55)' }, // Ocean Blue
+  { text: '#f472b6', bg: 'rgba(244, 114, 182, 0.22)', border: 'rgba(244, 114, 182, 0.55)' }, // Neon Pink
+  { text: '#22d3ee', bg: 'rgba(34, 211, 238, 0.22)', border: 'rgba(34, 211, 238, 0.55)' }, // Bright Cyan
+  { text: '#f87171', bg: 'rgba(248, 113, 113, 0.22)', border: 'rgba(248, 113, 113, 0.55)' }, // Coral Red
+  { text: '#a3e635', bg: 'rgba(163, 230, 53, 0.22)', border: 'rgba(163, 230, 53, 0.55)' }, // Lime Green
+  { text: '#818cf8', bg: 'rgba(129, 140, 248, 0.22)', border: 'rgba(129, 140, 248, 0.55)' }, // Indigo
+  { text: '#fb923c', bg: 'rgba(251, 146, 60, 0.22)', border: 'rgba(251, 146, 60, 0.55)' }  // Bright Orange
+];
+
+const inboxColorMap = new Map();
+
 function getInboxColorStyles(inboxName) {
-  const str = String(inboxName);
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  const key = String(inboxName || '').trim().toUpperCase();
+  if (!key) return INBOX_PALETTE[0];
+
+  if (inboxColorMap.has(key)) {
+    return inboxColorMap.get(key);
   }
-  
-  // Consistent color hue based on inbox name (using HSL)
-  const hue = Math.abs(hash) % 360;
-  
-  return {
-    bg: `hsla(${hue}, 65%, 45%, 0.18)`,
-    border: `hsla(${hue}, 65%, 50%, 0.35)`,
-    text: `hsl(${hue}, 85%, 72%)`
-  };
+
+  const assignedIndex = inboxColorMap.size % INBOX_PALETTE.length;
+  const chosen = INBOX_PALETTE[assignedIndex];
+  inboxColorMap.set(key, chosen);
+  return chosen;
 }
 
 function resolveInboxNames() {
