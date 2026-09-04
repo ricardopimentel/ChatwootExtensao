@@ -695,6 +695,47 @@
         </div>
       </section>
 
+      <!-- Tab: Login -->
+      <section id="login" class="tab-pane">
+        <div style="text-align: center; margin-bottom: 18px;">
+          <div style="width: 54px; height: 54px; border-radius: 50%; background: rgba(31, 147, 255, 0.12); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 8px;">
+            <img src="icons/icon-48.png" style="width: 32px; height: 32px;" alt="Chatwoot Logo">
+          </div>
+          <h2 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Entrar no Chatwoot</h2>
+          <p class="helper-text" style="margin-top: 4px;">Insira a URL da sua instância e suas credenciais de acesso.</p>
+        </div>
+
+        <form id="login-form" class="app-form">
+          <div class="form-group">
+            <label for="login-url">Servidor Chatwoot (URL)</label>
+            <input type="url" id="login-url" placeholder="https://seu-chatwoot.com" required>
+            <span class="helper-text">Ex: https://typebotifto.duckdns.org (sem barra no final)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="login-email">E-mail ou Usuário</label>
+            <input type="text" id="login-email" placeholder="seu-email@dominio.com" required>
+          </div>
+
+          <div class="form-group">
+            <label for="login-password">Senha</label>
+            <div class="password-input-wrapper">
+              <input type="password" id="login-password" placeholder="Digite sua senha do Chatwoot" required>
+              <button type="button" class="btn-toggle-password" id="btn-toggle-login-password">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="eye-open"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-actions" style="margin-top: 14px;">
+            <button type="submit" class="btn btn-primary" id="btn-login-submit" style="width: 100%; justify-content: center; gap: 8px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+              Entrar e Autenticar
+            </button>
+          </div>
+        </form>
+      </section>
+
       <!-- Tab: Settings -->
       <section id="settings" class="tab-pane">
         <form id="settings-form" class="app-form">
@@ -759,9 +800,13 @@
             <span class="helper-text" style="margin-top: 4px; display: block;">Envia a cópia completa do atendimento em e-mail formatado para o agente responsável ao finalizar a conversa.</span>
           </div>
 
-          <div class="form-actions" style="margin-top: 16px;">
-            <button type="submit" class="btn btn-primary" id="btn-save-settings" style="width: 100%;">
+          <div class="form-actions" style="margin-top: 16px; display: flex; gap: 10px;">
+            <button type="submit" class="btn btn-primary" id="btn-save-settings" style="flex: 2; justify-content: center;">
               Salvar Configurações
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-logout" style="flex: 1; justify-content: center; color: var(--danger); border-color: rgba(239, 68, 68, 0.3);">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              Sair
             </button>
           </div>
         </form>

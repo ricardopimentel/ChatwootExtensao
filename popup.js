@@ -139,6 +139,14 @@ const elements = {
   btnPauseBulk: document.getElementById('btn-pause-bulk'),
   btnCancelBulk: document.getElementById('btn-cancel-bulk'),
   
+  // Tab: Login
+  loginForm: document.getElementById('login-form'),
+  loginUrl: document.getElementById('login-url'),
+  loginEmail: document.getElementById('login-email'),
+  loginPassword: document.getElementById('login-password'),
+  btnLoginSubmit: document.getElementById('btn-login-submit'),
+  btnToggleLoginPassword: document.getElementById('btn-toggle-login-password'),
+
   // Tab: Settings
   settingsForm: document.getElementById('settings-form'),
   settingsUrl: document.getElementById('settings-url'),
@@ -150,6 +158,7 @@ const elements = {
   settingsDefaultAccount: document.getElementById('settings-default-account'),
   settingsDefaultInbox: document.getElementById('settings-default-inbox'),
   btnAiCorrectText: document.getElementById('btn-ai-correct-text'),
+  btnLogout: document.getElementById('btn-logout'),
   
   // Toast
   toast: document.getElementById('toast'),
@@ -475,10 +484,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       chatwootFetch('/api/v1/profile').then(profile => {
         if (profile) currentUserId = profile.id;
       }).catch(err => console.warn('Could not load profile on init:', err));
+      restoreNavigationState();
+    } else {
+      showLoginScreen();
     }
-
-    // Restore last navigation state (loads conversations list)
-    restoreNavigationState();
 
     // Check active tab and load reminders
     checkActiveTab().catch(err => console.warn('checkActiveTab error:', err));
@@ -1333,7 +1342,37 @@ function setupTabs() {
   });
 }
 
+function showLoginScreen() {
+  const tabNav = document.querySelector('.tab-nav');
+  if (tabNav) tabNav.style.display = 'none';
+
+  // Fill default URL if saved
+  if (elements.loginUrl && config.url) {
+    elements.loginUrl.value = config.url;
+  }
+
+  // Deactivate all panes and show login
+  elements.tabPanes.forEach(pane => pane.classList.remove('active'));
+  const loginPane = document.getElementById('login');
+  if (loginPane) loginPane.classList.add('active');
+}
+
+function showMainAppScreen() {
+  const tabNav = document.querySelector('.tab-nav');
+  if (tabNav) tabNav.style.display = 'flex';
+}
+
 function switchTab(tabId) {
+  // If not logged in and trying to open a main tab, redirect to login pane
+  if (!config.token && tabId !== 'login' && tabId !== 'settings') {
+    showLoginScreen();
+    return;
+  }
+
+  if (config.token && tabId !== 'login') {
+    showMainAppScreen();
+  }
+
   // Clean polling if leaving chats tab
   if (tabId !== 'chats' && chatPollInterval) {
     clearInterval(chatPollInterval);
@@ -1527,14 +1566,24 @@ async function saveRemindersToStorage(list) {
   });
 }
 
+function populateSettingsUI() {
+  if (elements.settingsUrl) elements.settingsUrl.value = config.url || '';
+  if (elements.settingsToken) elements.settingsToken.value = config.token || '';
+  if (elements.settingsCountry) elements.settingsCountry.value = config.defaultCountryCode || '+55';
+  if (elements.settingsGeminiKey) elements.settingsGeminiKey.value = config.geminiApiKey || '';
+  
+  const autoTranscriptCheck = document.getElementById('settings-auto-transcript-email');
+  if (autoTranscriptCheck && config.autoTranscriptEmail !== undefined) {
+    autoTranscriptCheck.checked = config.autoTranscriptEmail;
+  }
+}
+
 // STORAGE & SETTINGS LOAD
 async function loadSettings() {
   const savedSettings = await getSettingsFromStorage();
   if (savedSettings && savedSettings.url && savedSettings.token) {
     config = { ...config, ...savedSettings };
-    elements.settingsUrl.value = config.url || '';
-    elements.settingsToken.value = config.token || '';
-    elements.settingsCountry.value = config.defaultCountryCode || '+55';
+    populateSettingsUI();
 
     // Populate dropdowns & restore saved account and inbox
     try {
@@ -1545,15 +1594,6 @@ async function loadSettings() {
       }
     } catch (err) {
       console.warn('Could not populate accounts/inboxes on loadSettings:', err);
-    }
-
-    const autoTranscriptCheck = document.getElementById('settings-auto-transcript-email');
-    if (autoTranscriptCheck && config.autoTranscriptEmail !== undefined) {
-      autoTranscriptCheck.checked = config.autoTranscriptEmail;
-    }
-
-    if (elements.settingsGeminiKey) {
-      elements.settingsGeminiKey.value = config.geminiApiKey || '';
     }
 
     updateAiButtonVisibility();
@@ -1616,6 +1656,114 @@ function setupSettingsHandlers() {
       await populateAccountsAndInboxes();
     }
   });
+
+  // Toggle login password visibility
+  if (elements.btnToggleLoginPassword && elements.loginPassword) {
+    elements.btnToggleLoginPassword.addEventListener('click', () => {
+      const type = elements.loginPassword.getAttribute('type') === 'password' ? 'text' : 'password';
+      elements.loginPassword.setAttribute('type', type);
+    });
+  }
+
+  // Handle Login form submission
+  if (elements.loginForm) {
+    elements.loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      let url = elements.loginUrl.value.trim();
+      if (url.endsWith('/')) {
+        url = url.substring(0, url.length - 1);
+      }
+
+      const email = elements.loginEmail.value.trim();
+      const password = elements.loginPassword.value;
+
+      if (!url || !email || !password) {
+        showToast('Preencha o servidor, e-mail e senha.', 'error');
+        return;
+      }
+
+      const btnSubmit = elements.btnLoginSubmit || document.getElementById('btn-login-submit');
+      if (btnSubmit) {
+        btnSubmit.disabled = true;
+        btnSubmit.innerHTML = '🔄 Autenticando...';
+      }
+
+      try {
+        const loginResponse = await fetch(`${url}/auth/sign_in`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email, password })
+        });
+
+        if (!loginResponse.ok) {
+          const errData = await loginResponse.json().catch(() => ({}));
+          const errMsg = errData?.errors?.[0] || errData?.message || `Erro ${loginResponse.status}: Credenciais inválidas`;
+          throw new Error(errMsg);
+        }
+
+        const data = await loginResponse.json();
+        const userToken = data?.data?.access_token || data?.data?.token || data?.access_token;
+
+        if (!userToken) {
+          throw new Error('Servidor não retornou o token de acesso (access_token).');
+        }
+
+        config.url = url;
+        config.token = userToken;
+
+        if (data?.data?.id) {
+          currentUserId = data.data.id;
+        }
+
+        await saveSettingsToStorage(config);
+        populateSettingsUI();
+        updateConnectionStatus();
+
+        // Notify background worker
+        chrome.runtime.sendMessage({ action: 'settingsChanged' }).catch(() => {});
+
+        showToast('Login realizado com sucesso!', 'success');
+
+        // Populate accounts/inboxes and navigate to chats
+        try {
+          await populateAccountsAndInboxes();
+        } catch (pErr) {}
+
+        switchTab('chats');
+
+      } catch (err) {
+        console.error('Login error:', err);
+        showToast(`Falha no login: ${err.message}`, 'error');
+      } finally {
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+            Entrar e Autenticar
+          `;
+        }
+      }
+    });
+  }
+
+  // Handle Logout button click
+  if (elements.btnLogout) {
+    elements.btnLogout.addEventListener('click', async () => {
+      if (!confirm('Deseja realmente sair e remover a chave de acesso?')) return;
+
+      config.token = '';
+      await saveSettingsToStorage(config);
+      populateSettingsUI();
+      updateConnectionStatus();
+
+      // Show login tab and hide main tabs bar
+      showLoginScreen();
+      showToast('Logoff realizado com sucesso.', 'info');
+    });
+  }
 
   // Load accounts/inboxes when settings tab is active
   elements.settingsDefaultAccount.addEventListener('change', async (e) => {
@@ -7197,9 +7345,47 @@ async function fetchLinkPreview(url) {
   if (linkPreviewsCache[url]) return linkPreviewsCache[url];
 
   try {
-    const response = await fetch(url);
-    const html = await response.text();
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
 
+    // Fast fallback for domains known to restrict cross-origin fetching or return non-HTML CORS blocks
+    if (host.includes('chromewebstore.google.com') || 
+        host.includes('play.google.com') || 
+        host.includes('instagram.com') || 
+        host.includes('facebook.com') || 
+        host.includes('twitter.com') || 
+        host.includes('x.com') || 
+        host.includes('t.co')) {
+      const fallback = {
+        title: host.includes('chromewebstore') ? 'Chrome Web Store' : host,
+        description: parsed.pathname !== '/' ? parsed.pathname : '',
+        image: '',
+        url
+      };
+      linkPreviewsCache[url] = fallback;
+      return fallback;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+    const response = await fetch(url, { signal: controller.signal }).catch(() => null);
+    clearTimeout(timeoutId);
+
+    if (!response || !response.ok) {
+      const fallback = { title: host, description: '', image: '', url };
+      linkPreviewsCache[url] = fallback;
+      return fallback;
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/html')) {
+      const fallback = { title: host, description: '', image: '', url };
+      linkPreviewsCache[url] = fallback;
+      return fallback;
+    }
+
+    const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
@@ -7211,7 +7397,7 @@ async function fetchLinkPreview(url) {
                   doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content') || '';
 
     const preview = { 
-      title: title.trim(), 
+      title: title.trim() || host, 
       description: description.trim(), 
       image: image.trim(), 
       url 
@@ -7219,8 +7405,14 @@ async function fetchLinkPreview(url) {
     linkPreviewsCache[url] = preview;
     return preview;
   } catch (err) {
-    console.error('Failed to scrape link preview metadata:', url, err);
-    return null;
+    try {
+      const parsed = new URL(url);
+      const fallback = { title: parsed.hostname, description: '', image: '', url };
+      linkPreviewsCache[url] = fallback;
+      return fallback;
+    } catch (e) {
+      return null;
+    }
   }
 }
 
