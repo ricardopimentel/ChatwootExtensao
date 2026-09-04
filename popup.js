@@ -186,6 +186,12 @@ const elements = {
   contactModalAvatarWrapper: document.getElementById('contact-modal-avatar-wrapper'),
   contactModalAvatar: document.getElementById('contact-modal-avatar'),
   contactModalName: document.getElementById('contact-modal-name'),
+  btnEditContactName: document.getElementById('btn-edit-contact-name'),
+  contactNameDisplayContainer: document.getElementById('contact-name-display-container'),
+  contactNameEditContainer: document.getElementById('contact-name-edit-container'),
+  contactNameInput: document.getElementById('contact-name-input'),
+  btnSaveContactName: document.getElementById('btn-save-contact-name'),
+  btnCancelContactName: document.getElementById('btn-cancel-contact-name'),
   contactModalPhone: document.getElementById('contact-modal-phone'),
   contactModalValPhone: document.getElementById('contact-modal-val-phone'),
   contactModalValEmail: document.getElementById('contact-modal-val-email'),
@@ -265,9 +271,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupTagHandlers();
     setupReportsHandlers();
     setupLightboxHandlers();
+    setupContactNameEditing();
     setupContextMenuHandlers();
     setupBulkMessaging();
-    setupNewChatContactSearch();
+    if (typeof setupNewChatContactSearch === 'function') {
+      setupNewChatContactSearch();
+    }
 
     // Close buttons
     const btnReplyPreviewClose = document.getElementById('btn-reply-preview-close');
@@ -843,8 +852,160 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Setup Lightbox Modal events
-  setupLightboxHandlers();
+let newChatSearchTimeout = null;
+let currentNewChatMode = 'contact'; // 'contact' or 'phone'
+
+function setupNewChatContactSearch() {
+  const nameInput = elements.newChatName;
+  const phoneInput = elements.newChatPhone;
+  const phoneNameInput = elements.newChatPhoneName;
+  const dropdown = elements.newChatContactsDropdown;
+  const btnModeContact = elements.btnModeContact;
+  const btnModePhone = elements.btnModePhone;
+  const groupContactSearch = elements.groupContactSearch;
+  const groupPhoneInput = elements.groupPhoneInput;
+  const groupPhoneNameOptional = elements.groupPhoneNameOptional;
+  const selectedContactCard = elements.selectedContactCard;
+  const selectedContactName = elements.selectedContactName;
+  const selectedContactPhone = elements.selectedContactPhone;
+  const btnRemoveSelected = elements.btnRemoveSelectedContact;
+
+  if (!btnModeContact || !btnModePhone) return;
+
+  // Toggle Mode Handler
+  const switchMode = (mode) => {
+    currentNewChatMode = mode;
+    if (mode === 'contact') {
+      btnModeContact.classList.add('active');
+      btnModePhone.classList.remove('active');
+      groupContactSearch?.classList.remove('hidden');
+      groupPhoneInput?.classList.add('hidden');
+      groupPhoneNameOptional?.classList.add('hidden');
+      if (phoneInput) phoneInput.required = false;
+    } else {
+      btnModePhone.classList.add('active');
+      btnModeContact.classList.remove('active');
+      groupContactSearch?.classList.add('hidden');
+      groupPhoneInput?.classList.remove('hidden');
+      groupPhoneNameOptional?.classList.remove('hidden');
+      if (phoneInput) phoneInput.required = true;
+      if (dropdown) dropdown.classList.add('hidden');
+    }
+  };
+
+  btnModeContact.addEventListener('click', () => switchMode('contact'));
+  btnModePhone.addEventListener('click', () => switchMode('phone'));
+
+  // Clear selected contact card
+  if (btnRemoveSelected) {
+    btnRemoveSelected.addEventListener('click', () => {
+      if (nameInput) nameInput.value = '';
+      if (phoneInput) phoneInput.value = '';
+      selectedContactCard?.classList.add('hidden');
+      nameInput?.classList.remove('hidden');
+      nameInput?.focus();
+    });
+  }
+
+  // Live Contact Search logic
+  const performSearch = (query) => {
+    if (currentNewChatMode !== 'contact') return;
+    if (newChatSearchTimeout) clearTimeout(newChatSearchTimeout);
+
+    const q = query.trim();
+    if (q.length < 2) {
+      if (dropdown) {
+        dropdown.classList.add('hidden');
+        dropdown.innerHTML = '';
+      }
+      return;
+    }
+
+    newChatSearchTimeout = setTimeout(async () => {
+      const accountId = elements.newChatAccount?.value || config?.defaultAccount;
+      if (!accountId) {
+        dropdown?.classList.add('hidden');
+        return;
+      }
+
+      try {
+        if (dropdown) {
+          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Pesquisando contatos...</div>`;
+          dropdown.classList.remove('hidden');
+        }
+
+        const res = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/search?q=${encodeURIComponent(q)}`);
+        const contacts = res && Array.isArray(res) ? res : (res && Array.isArray(res.payload) ? res.payload : []);
+
+        if (!dropdown) return;
+
+        if (contacts.length === 0) {
+          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Nenhum contato encontrado com esse nome. Mude para o modo "Telefone" para criar.</div>`;
+          return;
+        }
+
+        dropdown.innerHTML = contacts.map(c => {
+          const cName = c.name || 'Sem nome';
+          const cPhone = c.phone_number || c.email || 'Sem telefone';
+          const initial = (cName.charAt(0) || 'C').toUpperCase();
+          const avatarUrl = c.thumbnail || c.avatar_url;
+
+          return `
+            <div class="contact-search-item" data-id="${c.id}" data-name="${encodeURIComponent(cName)}" data-phone="${encodeURIComponent(cPhone)}">
+              ${avatarUrl ? `<img src="${avatarUrl}" class="contact-search-avatar">` : `<div class="contact-search-avatar">${initial}</div>`}
+              <div class="contact-search-info">
+                <span class="contact-search-name">${escapeHtml(cName)}</span>
+                <span class="contact-search-detail">${escapeHtml(cPhone)}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        dropdown.querySelectorAll('.contact-search-item').forEach(item => {
+          item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const selName = decodeURIComponent(item.getAttribute('data-name') || '');
+            const selPhone = decodeURIComponent(item.getAttribute('data-phone') || '');
+
+            if (nameInput) nameInput.value = selName;
+            if (phoneInput && selPhone && selPhone !== 'Sem telefone') {
+              phoneInput.value = selPhone;
+            }
+
+            if (dropdown) {
+              dropdown.classList.add('hidden');
+              dropdown.innerHTML = '';
+            }
+
+            // Show selected contact card summary
+            if (selectedContactCard && selectedContactName && selectedContactPhone) {
+              selectedContactName.textContent = selName;
+              selectedContactPhone.textContent = selPhone !== 'Sem telefone' ? selPhone : 'Sem telefone registrado';
+              selectedContactCard.classList.remove('hidden');
+              if (nameInput) nameInput.classList.add('hidden');
+            }
+
+            showToast(`Contato "${selName}" selecionado!`, 'success');
+          });
+        });
+
+      } catch (err) {
+        console.warn('Error searching contacts:', err);
+        if (dropdown) dropdown.classList.add('hidden');
+      }
+    }, 280);
+  };
+
+  if (nameInput) {
+    nameInput.addEventListener('input', (e) => performSearch(e.target.value));
+  }
+
+  document.addEventListener('click', (e) => {
+    if (dropdown && !e.target.closest('#new-chat-name') && !e.target.closest('#new-chat-contacts-dropdown')) {
+      dropdown.classList.add('hidden');
+    }
+  });
+}
 
 // TAB HANDLING
 function setupTabs() {
@@ -1969,161 +2130,6 @@ async function deleteReminder(id) {
   await saveRemindersToStorage(filteredList);
   showToast('Lembrete excluído.', 'success');
   loadReminders(elements.searchInput?.value || '');
-}
-
-let newChatSearchTimeout = null;
-let currentNewChatMode = 'contact'; // 'contact' or 'phone'
-
-function setupNewChatContactSearch() {
-  const nameInput = elements.newChatName;
-  const phoneInput = elements.newChatPhone;
-  const phoneNameInput = elements.newChatPhoneName;
-  const dropdown = elements.newChatContactsDropdown;
-  const btnModeContact = elements.btnModeContact;
-  const btnModePhone = elements.btnModePhone;
-  const groupContactSearch = elements.groupContactSearch;
-  const groupPhoneInput = elements.groupPhoneInput;
-  const groupPhoneNameOptional = elements.groupPhoneNameOptional;
-  const selectedContactCard = elements.selectedContactCard;
-  const selectedContactName = elements.selectedContactName;
-  const selectedContactPhone = elements.selectedContactPhone;
-  const btnRemoveSelected = elements.btnRemoveSelectedContact;
-
-  if (!btnModeContact || !btnModePhone) return;
-
-  // Toggle Mode Handler
-  const switchMode = (mode) => {
-    currentNewChatMode = mode;
-    if (mode === 'contact') {
-      btnModeContact.classList.add('active');
-      btnModePhone.classList.remove('active');
-      groupContactSearch?.classList.remove('hidden');
-      groupPhoneInput?.classList.add('hidden');
-      groupPhoneNameOptional?.classList.add('hidden');
-      if (phoneInput) phoneInput.required = false;
-    } else {
-      btnModePhone.classList.add('active');
-      btnModeContact.classList.remove('active');
-      groupContactSearch?.classList.add('hidden');
-      groupPhoneInput?.classList.remove('hidden');
-      groupPhoneNameOptional?.classList.remove('hidden');
-      if (phoneInput) phoneInput.required = true;
-      if (dropdown) dropdown.classList.add('hidden');
-    }
-  };
-
-  btnModeContact.addEventListener('click', () => switchMode('contact'));
-  btnModePhone.addEventListener('click', () => switchMode('phone'));
-
-  // Clear selected contact card
-  if (btnRemoveSelected) {
-    btnRemoveSelected.addEventListener('click', () => {
-      if (nameInput) nameInput.value = '';
-      if (phoneInput) phoneInput.value = '';
-      selectedContactCard?.classList.add('hidden');
-      nameInput?.classList.remove('hidden');
-      nameInput?.focus();
-    });
-  }
-
-  // Live Contact Search logic
-  const performSearch = (query) => {
-    if (currentNewChatMode !== 'contact') return;
-    if (newChatSearchTimeout) clearTimeout(newChatSearchTimeout);
-
-    const q = query.trim();
-    if (q.length < 2) {
-      if (dropdown) {
-        dropdown.classList.add('hidden');
-        dropdown.innerHTML = '';
-      }
-      return;
-    }
-
-    newChatSearchTimeout = setTimeout(async () => {
-      const accountId = elements.newChatAccount?.value || config?.defaultAccount;
-      if (!accountId) {
-        dropdown?.classList.add('hidden');
-        return;
-      }
-
-      try {
-        if (dropdown) {
-          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Pesquisando contatos...</div>`;
-          dropdown.classList.remove('hidden');
-        }
-
-        const res = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/search?q=${encodeURIComponent(q)}`);
-        const contacts = res && Array.isArray(res) ? res : (res && Array.isArray(res.payload) ? res.payload : []);
-
-        if (!dropdown) return;
-
-        if (contacts.length === 0) {
-          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Nenhum contato encontrado com esse nome. Mude para o modo "Telefone" para criar.</div>`;
-          return;
-        }
-
-        dropdown.innerHTML = contacts.map(c => {
-          const cName = c.name || 'Sem nome';
-          const cPhone = c.phone_number || c.email || 'Sem telefone';
-          const initial = (cName.charAt(0) || 'C').toUpperCase();
-          const avatarUrl = c.thumbnail || c.avatar_url;
-
-          return `
-            <div class="contact-search-item" data-id="${c.id}" data-name="${encodeURIComponent(cName)}" data-phone="${encodeURIComponent(cPhone)}">
-              ${avatarUrl ? `<img src="${avatarUrl}" class="contact-search-avatar">` : `<div class="contact-search-avatar">${initial}</div>`}
-              <div class="contact-search-info">
-                <span class="contact-search-name">${escapeHtml(cName)}</span>
-                <span class="contact-search-detail">${escapeHtml(cPhone)}</span>
-              </div>
-            </div>
-          `;
-        }).join('');
-
-        dropdown.querySelectorAll('.contact-search-item').forEach(item => {
-          item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const selName = decodeURIComponent(item.getAttribute('data-name') || '');
-            const selPhone = decodeURIComponent(item.getAttribute('data-phone') || '');
-
-            if (nameInput) nameInput.value = selName;
-            if (phoneInput && selPhone && selPhone !== 'Sem telefone') {
-              phoneInput.value = selPhone;
-            }
-
-            if (dropdown) {
-              dropdown.classList.add('hidden');
-              dropdown.innerHTML = '';
-            }
-
-            // Show selected contact card summary
-            if (selectedContactCard && selectedContactName && selectedContactPhone) {
-              selectedContactName.textContent = selName;
-              selectedContactPhone.textContent = selPhone !== 'Sem telefone' ? selPhone : 'Sem telefone registrado';
-              selectedContactCard.classList.remove('hidden');
-              if (nameInput) nameInput.classList.add('hidden');
-            }
-
-            showToast(`Contato "${selName}" selecionado!`, 'success');
-          });
-        });
-
-      } catch (err) {
-        console.warn('Error searching contacts:', err);
-        if (dropdown) dropdown.classList.add('hidden');
-      }
-    }, 280);
-  };
-
-  if (nameInput) {
-    nameInput.addEventListener('input', (e) => performSearch(e.target.value));
-  }
-
-  document.addEventListener('click', (e) => {
-    if (dropdown && !e.target.closest('#new-chat-name') && !e.target.closest('#new-chat-contacts-dropdown')) {
-      dropdown.classList.add('hidden');
-    }
-  });
 }
 
 // INICIAR CONVERSA POR TELEFONE OU CONTATO
@@ -4142,11 +4148,18 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   const emojiPicker = document.getElementById('emoji-picker');
   if (emojiPicker) emojiPicker.classList.add('hidden');
 
+  const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
+  const senderObj = conversation?.meta?.sender || conversation?.sender;
+  const senderId = senderObj?.id;
+
   currentActiveChat = {
     id: conversationId,
     contactName: contactName,
     accountId: accountId,
-    inboxId: inboxId
+    inboxId: inboxId,
+    contactId: senderId,
+    senderId: senderId,
+    sender: senderObj
   };
 
   currentChatMessages = [];
@@ -4158,10 +4171,9 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   
   let avatarUrl = '';
   let phoneNumber = '';
-  const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
   if (conversation) {
-    avatarUrl = getSenderAvatarUrl(conversation.meta?.sender || conversation.sender);
-    phoneNumber = conversation.meta?.sender?.phone_number || conversation.meta?.sender?.identifier || '';
+    avatarUrl = getSenderAvatarUrl(senderObj);
+    phoneNumber = senderObj?.phone_number || senderObj?.identifier || '';
   }
 
   elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, avatarUrl);
@@ -7671,6 +7683,123 @@ function updateMentionChipsUI() {
 // WHATSAPP-STYLE CONTACT INFO MODAL & PHOTO LIGHTBOX
 let currentModalPhotoUrl = '';
 let currentModalContactName = '';
+let currentModalContactId = null;
+let currentModalAccountId = null;
+
+function setupContactNameEditing() {
+  const btnEdit = elements.btnEditContactName;
+  const btnSave = elements.btnSaveContactName;
+  const btnCancel = elements.btnCancelContactName;
+  const displayContainer = elements.contactNameDisplayContainer;
+  const editContainer = elements.contactNameEditContainer;
+  const input = elements.contactNameInput;
+
+  if (!btnEdit || !btnSave || !input) return;
+
+  const startEdit = () => {
+    input.value = elements.contactModalName ? elements.contactModalName.textContent.trim() : currentModalContactName;
+    if (displayContainer) displayContainer.classList.add('hidden');
+    if (editContainer) editContainer.classList.remove('hidden');
+    input.focus();
+    input.select();
+  };
+
+  const cancelEdit = () => {
+    if (editContainer) editContainer.classList.add('hidden');
+    if (displayContainer) displayContainer.classList.remove('hidden');
+  };
+
+  const saveEdit = async () => {
+    const newName = input.value.trim();
+    if (!newName) {
+      showToast('O nome do contato não pode ficar em branco.', 'error');
+      return;
+    }
+
+    if (!currentModalContactId || currentModalContactId === '-') {
+      showToast('ID do contato não encontrado.', 'error');
+      return;
+    }
+
+    const accountId = currentModalAccountId || config.defaultAccount;
+    if (!accountId) {
+      showToast('Conta Chatwoot não identificada.', 'error');
+      return;
+    }
+
+    btnSave.disabled = true;
+
+    try {
+      showToast('Salvando nome no Chatwoot...', 'info');
+
+      // PUT /api/v1/accounts/{account_id}/contacts/{id}
+      await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/${currentModalContactId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: newName })
+      });
+
+      // Update modal display
+      if (elements.contactModalName) elements.contactModalName.textContent = newName;
+      currentModalContactName = newName;
+
+      // Update current active chat if open
+      if (currentActiveChat && (String(currentActiveChat.senderId) === String(currentModalContactId) || String(currentActiveChat.contactId) === String(currentModalContactId))) {
+        currentActiveChat.contactName = newName;
+        
+        // Update popup header title
+        const headerNameEl = document.querySelector('.chat-header-name');
+        if (headerNameEl) headerNameEl.textContent = newName;
+        if (isChatWindowMode) {
+          document.title = `${newName} - Chatwoot`;
+        }
+      }
+
+      // Update matching conversations in cache and DOM list cards
+      const updateMatchingConvs = (convList) => {
+        if (!Array.isArray(convList)) return;
+        convList.forEach(conv => {
+          if (!conv) return;
+          const senderId = conv.meta?.sender?.id || conv.sender?.id;
+          if (String(senderId) === String(currentModalContactId)) {
+            if (conv.meta && conv.meta.sender) conv.meta.sender.name = newName;
+            if (conv.sender) conv.sender.name = newName;
+            
+            // Update conversation card in list DOM
+            const cardNameEl = document.querySelector(`.chat-card[data-conv-id="${conv.id}"] .chat-card-name`);
+            if (cardNameEl) {
+              cardNameEl.textContent = newName;
+            }
+          }
+        });
+      };
+
+      updateMatchingConvs(fetchedConversations);
+      updateMatchingConvs(openConversationsCache);
+
+      cancelEdit();
+      showToast('Nome do contato atualizado com sucesso no Chatwoot!', 'success');
+    } catch (err) {
+      console.error('Error updating contact name:', err);
+      showToast('Erro ao salvar o nome do contato no Chatwoot.', 'error');
+    } finally {
+      btnSave.disabled = false;
+    }
+  };
+
+  btnEdit.addEventListener('click', startEdit);
+  btnCancel.addEventListener('click', cancelEdit);
+  btnSave.addEventListener('click', saveEdit);
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveEdit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEdit();
+    }
+  });
+}
 
 async function openContactInfoModal(overrideSender) {
   if (!elements.contactInfoModal) return;
@@ -7678,16 +7807,47 @@ async function openContactInfoModal(overrideSender) {
   const conversationId = currentActiveChat ? currentActiveChat.id : null;
   const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
 
-  const sender = overrideSender || conversation?.meta?.sender || conversation?.sender;
-  const contactName = sender?.name || currentActiveChat?.contactName || 'Cliente';
-  const avatarUrl = getSenderAvatarUrl(sender);
-  const phone = sender?.phone_number || sender?.identifier || '';
-  const email = sender?.email || '';
-  const contactId = sender?.id || conversation?.meta?.sender?.id || '-';
+  let sender = overrideSender || conversation?.meta?.sender || conversation?.sender || currentActiveChat?.sender;
+  let contactName = sender?.name || currentActiveChat?.contactName || 'Cliente';
+  let avatarUrl = getSenderAvatarUrl(sender);
+  let phone = sender?.phone_number || sender?.identifier || '';
+  let email = sender?.email || '';
+  let contactId = sender?.id || conversation?.meta?.sender?.id || currentActiveChat?.contactId || currentActiveChat?.senderId || '-';
   const inboxId = currentActiveChat?.inboxId;
-  const accountId = currentActiveChat?.accountId;
+  const accountId = currentActiveChat?.accountId || config.defaultAccount;
+
+  // Fallback API lookup for closed/resolved conversations or un-cached contacts
+  if ((!contactId || contactId === '-' || !sender) && conversationId && accountId) {
+    try {
+      const convRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`);
+      if (convRes) {
+        sender = convRes.meta?.sender || convRes.sender || sender;
+        if (sender) {
+          contactId = sender.id || contactId;
+          contactName = sender.name || contactName;
+          avatarUrl = getSenderAvatarUrl(sender) || avatarUrl;
+          phone = sender.phone_number || sender.identifier || phone;
+          email = sender.email || email;
+          
+          if (currentActiveChat) {
+            currentActiveChat.sender = sender;
+            currentActiveChat.contactId = contactId;
+            currentActiveChat.senderId = contactId;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch conversation details for contact modal:', err);
+    }
+  }
 
   currentModalContactName = contactName;
+  currentModalContactId = contactId;
+  currentModalAccountId = accountId || currentActiveChat?.accountId || config?.defaultAccount;
+
+  // Reset name edit mode
+  if (elements.contactNameDisplayContainer) elements.contactNameDisplayContainer.classList.remove('hidden');
+  if (elements.contactNameEditContainer) elements.contactNameEditContainer.classList.add('hidden');
 
   // Render Name & Phone
   if (elements.contactModalName) elements.contactModalName.textContent = contactName;

@@ -4551,6 +4551,118 @@ mark.search-highlight {
   font-size: 11.5px;
 }
 
+/* Contact Name Inline Edit inside Modal */
+.contact-name-edit-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  width: 100%;
+}
+
+.contact-name-display-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.contact-modal-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  text-align: center;
+  word-break: break-word;
+}
+
+.btn-edit-contact-name {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-secondary);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.btn-edit-contact-name:hover {
+  background: var(--primary-gradient);
+  color: #ffffff;
+  border-color: transparent;
+  transform: scale(1.08);
+}
+
+.btn-edit-contact-name svg {
+  stroke: currentColor;
+}
+
+.contact-name-edit-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 320px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--primary-color);
+  border-radius: 8px;
+  padding: 4px 6px 4px 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.contact-name-input {
+  flex: 1;
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-family);
+  font-size: 14px !important;
+  font-weight: 600;
+  padding: 4px 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.btn-save-contact-name,
+.btn-cancel-contact-name {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.btn-save-contact-name {
+  background: #10b981;
+  color: #ffffff;
+}
+
+.btn-save-contact-name:hover {
+  background: #059669;
+}
+
+.btn-cancel-contact-name {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+}
+
+.btn-cancel-contact-name:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
 
 
 
