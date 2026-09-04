@@ -205,7 +205,19 @@ const elements = {
   btnAiGenerateClose: document.getElementById('btn-ai-generate-close'),
   btnAiGenerateCancel: document.getElementById('btn-ai-generate-cancel'),
   btnAiGenerateSubmit: document.getElementById('btn-ai-generate-submit'),
-  aiPromptInput: document.getElementById('ai-prompt-input')
+  btnAttachFile: document.getElementById('btn-attach-file'),
+  chatFileInput: document.getElementById('chat-file-input'),
+  btnAttachContact: document.getElementById('btn-attach-contact'),
+  attachMenuPopover: document.getElementById('attach-menu-popover'),
+  btnMenuAttachFiles: document.getElementById('btn-menu-attach-files'),
+  btnMenuAttachContact: document.getElementById('btn-menu-attach-contact'),
+  attachContactModal: document.getElementById('attach-contact-modal'),
+  btnAttachContactClose: document.getElementById('btn-attach-contact-close'),
+  attachContactSearchInput: document.getElementById('attach-contact-search-input'),
+  attachContactDropdown: document.getElementById('attach-contact-dropdown'),
+  attachContactName: document.getElementById('attach-contact-name'),
+  attachContactPhone: document.getElementById('attach-contact-phone'),
+  btnConfirmAttachContact: document.getElementById('btn-confirm-attach-contact')
 };
 
 // INITIALIZATION
@@ -272,6 +284,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupReportsHandlers();
     setupLightboxHandlers();
     setupContactNameEditing();
+    setupAttachContactModal();
     setupContextMenuHandlers();
     setupBulkMessaging();
     if (typeof setupNewChatContactSearch === 'function') {
@@ -600,11 +613,73 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Close AI Options Popover on click outside
+  // Close AI Options Popover & handle contact card chat button on click outside/delegation
   document.addEventListener('click', (e) => {
     if (elements.aiOptionsPopover && !elements.aiOptionsPopover.classList.contains('hidden')) {
       if (!e.target.closest('#ai-options-popover') && !e.target.closest('#btn-ai-correct-text')) {
         elements.aiOptionsPopover.classList.add('hidden');
+      }
+    }
+
+    // Handle "Conversar" button click on WhatsApp Contact Cards
+    const btnCardChat = e.target.closest('.btn-whatsapp-card-chat');
+    if (btnCardChat) {
+      e.preventDefault();
+      e.stopPropagation();
+      const rawPhone = btnCardChat.getAttribute('data-phone') || '';
+      const name = btnCardChat.getAttribute('data-name') || '';
+      const cleanPhone = rawPhone.replace(/[^\d]/g, '');
+
+      // Check if a conversation with this phone number is already active/open in fetchedConversations or openConversationsCache
+      const allConvs = [...fetchedConversations, ...openConversationsCache];
+      const existingConv = allConvs.find(c => {
+        if (!c) return false;
+        const senderPhone = c.meta?.sender?.phone_number || c.sender?.phone_number || c.meta?.sender?.identifier || c.sender?.identifier || '';
+        return isSamePhoneNumber(senderPhone, rawPhone);
+      });
+
+      if (existingConv) {
+        showToast(`Abrindo conversa existente com ${existingConv.meta?.sender?.name || name}...`, 'info');
+        openConversationChat(existingConv.id, existingConv.meta?.sender?.name || name, existingConv.account_id || config.defaultAccount, existingConv.inbox_id || config.defaultInbox);
+        return;
+      }
+
+      // Save previous conversation context so user can easily navigate back
+      const previousChatContext = currentActiveChat ? { ...currentActiveChat } : null;
+
+      // If no active conversation found in local list, proceed to New Chat tab with prefilled phone
+      switchTab('new-chat');
+
+      // Show back button on new-chat tab if coming from an active conversation
+      const btnBackToConv = document.getElementById('btn-new-chat-back-to-conversation');
+      if (btnBackToConv) {
+        if (previousChatContext) {
+          btnBackToConv.classList.remove('hidden');
+          btnBackToConv.onclick = (backEvt) => {
+            backEvt.preventDefault();
+            btnBackToConv.classList.add('hidden');
+            openConversationChat(previousChatContext.id, previousChatContext.contactName, previousChatContext.accountId, previousChatContext.inboxId);
+          };
+        } else {
+          btnBackToConv.classList.add('hidden');
+        }
+      }
+
+      // Force switch mode to 'phone' via button click if available
+      const btnModePhone = elements.btnModePhone || document.getElementById('btn-mode-phone');
+      if (btnModePhone) {
+        btnModePhone.click();
+      }
+
+      if (elements.newChatPhone && rawPhone) {
+        elements.newChatPhone.value = rawPhone;
+      }
+      if (elements.newChatPhoneName && name) {
+        elements.newChatPhoneName.value = name;
+      }
+
+      if (rawPhone) {
+        lookupContactByPhone();
       }
     }
   });
@@ -720,14 +795,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupEmojiPicker();
 
   // File upload trigger
-  const btnAttachFile = document.getElementById('btn-attach-file');
   const chatFileInput = document.getElementById('chat-file-input');
-  if (btnAttachFile && chatFileInput) {
-    btnAttachFile.addEventListener('click', (e) => {
-      e.preventDefault();
-      chatFileInput.click();
-    });
-
+  if (chatFileInput) {
     chatFileInput.addEventListener('change', (e) => {
       const files = Array.from(e.target.files);
       if (files.length > 0) {
@@ -1005,6 +1074,247 @@ function setupNewChatContactSearch() {
       dropdown.classList.add('hidden');
     }
   });
+}
+
+// HELPER TO COMPARE BRAZILIAN PHONE NUMBERS FLEXIBLY (HANDLING 9TH DIGIT DIFFERENCES)
+function isSamePhoneNumber(phone1, phone2) {
+  if (!phone1 || !phone2) return false;
+  const p1 = String(phone1).replace(/[^\d]/g, '');
+  const p2 = String(phone2).replace(/[^\d]/g, '');
+  if (!p1 || !p2) return false;
+
+  // Exact digits match
+  if (p1 === p2) return true;
+
+  // Direct suffix match (e.g. 5563991017954 vs 6391017954 or 556391017954)
+  if (p1.endsWith(p2) || p2.endsWith(p1)) return true;
+
+  // Compare last 8 digits (main phone number body in Brazil)
+  if (p1.length >= 8 && p2.length >= 8) {
+    const tail1_8 = p1.slice(-8);
+    const tail2_8 = p2.slice(-8);
+    
+    if (tail1_8 === tail2_8) {
+      // Extract DDD (2 digits before the 8 digits or before the 9th digit '9')
+      // p1 DDD:
+      let ddd1 = '';
+      if (p1.length === 10) ddd1 = p1.slice(0, 2);          // e.g. 63 91017954
+      else if (p1.length === 11) ddd1 = p1.slice(0, 2);     // e.g. 63 9 91017954
+      else if (p1.length === 12) ddd1 = p1.slice(2, 4);     // e.g. 55 63 91017954
+      else if (p1.length >= 13) ddd1 = p1.slice(2, 4);      // e.g. 55 63 9 91017954
+
+      // p2 DDD:
+      let ddd2 = '';
+      if (p2.length === 10) ddd2 = p2.slice(0, 2);          // e.g. 63 91017954
+      else if (p2.length === 11) ddd2 = p2.slice(0, 2);     // e.g. 63 9 91017954
+      else if (p2.length === 12) ddd2 = p2.slice(2, 4);     // e.g. 55 63 91017954
+      else if (p2.length >= 13) ddd2 = p2.slice(2, 4);      // e.g. 55 63 9 91017954
+
+      if (!ddd1 || !ddd2 || ddd1 === ddd2) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// GENERATE VCARD FILE FOR WHATSAPP CONTACT ATTACHMENT
+function generateVCardFile(name, phone) {
+  const cleanName = (name || 'Contato').trim();
+  let cleanPhone = (phone || '').replace(/[^\d+]/g, '');
+  if (cleanPhone && !cleanPhone.startsWith('+')) {
+    const defaultCountry = config.defaultCountryCode ? config.defaultCountryCode.replace(/[^\d+]/g, '') : '55';
+    const country = defaultCountry.startsWith('+') ? defaultCountry : `+${defaultCountry}`;
+    cleanPhone = `${country}${cleanPhone}`;
+  }
+
+  const nameParts = cleanName.split(' ');
+  const firstName = nameParts[0] || cleanName;
+  const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+
+  const vCardLines = [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    `N:${lastName};${firstName};;;`,
+    `FN:${cleanName}`,
+    `TEL;TYPE=CELL;TYPE=VOICE;TYPE=pref:${cleanPhone}`,
+    'END:VCARD'
+  ];
+
+  const vCardString = vCardLines.join('\r\n');
+  const safeFilename = cleanName.replace(/[^a-zA-Z0-9_\-]/g, '_') + '.vcf';
+  const blob = new Blob([vCardString], { type: 'text/vcard;charset=utf-8' });
+  return new File([blob], safeFilename, { type: 'text/vcard' });
+}
+
+let attachContactSearchTimeout = null;
+
+function setupAttachContactModal() {
+  const modal = elements.attachContactModal || document.getElementById('attach-contact-modal');
+  const btnClose = elements.btnAttachContactClose || document.getElementById('btn-attach-contact-close');
+  const searchInput = elements.attachContactSearchInput || document.getElementById('attach-contact-search-input');
+  const dropdown = elements.attachContactDropdown || document.getElementById('attach-contact-dropdown');
+  const nameInput = elements.attachContactName || document.getElementById('attach-contact-name');
+  const phoneInput = elements.attachContactPhone || document.getElementById('attach-contact-phone');
+  const btnConfirm = elements.btnConfirmAttachContact || document.getElementById('btn-confirm-attach-contact');
+
+  if (!modal) return;
+
+  const openModal = () => {
+    if (searchInput) searchInput.value = '';
+    if (nameInput) nameInput.value = '';
+    if (phoneInput) phoneInput.value = '';
+    if (dropdown) {
+      dropdown.classList.add('hidden');
+      dropdown.innerHTML = '';
+    }
+    modal.classList.remove('hidden');
+    if (searchInput) searchInput.focus();
+  };
+
+  const closeModal = () => {
+    modal.classList.add('hidden');
+    if (dropdown) {
+      dropdown.classList.add('hidden');
+      dropdown.innerHTML = '';
+    }
+  };
+
+  // Robust global event delegation for attachment options
+  document.addEventListener('click', (e) => {
+    const btnAttachFile = e.target.closest('#btn-attach-file');
+    const btnMenuFiles = e.target.closest('#btn-menu-attach-files');
+    const btnMenuContact = e.target.closest('#btn-menu-attach-contact');
+    const attachMenuPopover = document.getElementById('attach-menu-popover');
+
+    if (btnAttachFile) {
+      e.stopPropagation();
+      e.preventDefault();
+      if (attachMenuPopover) attachMenuPopover.classList.toggle('hidden');
+      return;
+    }
+
+    if (btnMenuFiles) {
+      e.stopPropagation();
+      e.preventDefault();
+      if (attachMenuPopover) attachMenuPopover.classList.add('hidden');
+      const fileInput = elements.chatFileInput || document.getElementById('chat-file-input');
+      if (fileInput) fileInput.click();
+      return;
+    }
+
+    if (btnMenuContact) {
+      e.stopPropagation();
+      e.preventDefault();
+      if (attachMenuPopover) attachMenuPopover.classList.add('hidden');
+      openModal();
+      return;
+    }
+
+    // Dismiss popover on outside click
+    if (attachMenuPopover && !attachMenuPopover.classList.contains('hidden')) {
+      if (!e.target.closest('#btn-attach-file') && !e.target.closest('#attach-menu-popover')) {
+        attachMenuPopover.classList.add('hidden');
+      }
+    }
+  });
+
+  if (btnClose) btnClose.addEventListener('click', closeModal);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  // Live Contact Search within Attach Contact Modal
+  if (searchInput && dropdown) {
+    searchInput.addEventListener('input', (e) => {
+      if (attachContactSearchTimeout) clearTimeout(attachContactSearchTimeout);
+
+      const q = e.target.value.trim();
+      if (q.length < 2) {
+        dropdown.classList.add('hidden');
+        dropdown.innerHTML = '';
+        return;
+      }
+
+      attachContactSearchTimeout = setTimeout(async () => {
+        const accountId = currentActiveChat?.accountId || config?.defaultAccount;
+        if (!accountId) return;
+
+        try {
+          dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Pesquisando contatos...</div>`;
+          dropdown.classList.remove('hidden');
+
+          const res = await chatwootFetch(`/api/v1/accounts/${accountId}/contacts/search?q=${encodeURIComponent(q)}`);
+          const contacts = res && Array.isArray(res) ? res : (res && Array.isArray(res.payload) ? res.payload : []);
+
+          if (contacts.length === 0) {
+            dropdown.innerHTML = `<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Nenhum contato encontrado. Preencha manualmente abaixo.</div>`;
+            return;
+          }
+
+          dropdown.innerHTML = contacts.map(c => {
+            const cName = c.name || 'Sem nome';
+            const cPhone = c.phone_number || c.email || 'Sem telefone';
+            const initial = (cName.charAt(0) || 'C').toUpperCase();
+            const avatarUrl = c.thumbnail || c.avatar_url;
+
+            return `
+              <div class="contact-search-item" data-name="${encodeURIComponent(cName)}" data-phone="${encodeURIComponent(cPhone)}">
+                ${avatarUrl ? `<img src="${avatarUrl}" class="contact-search-avatar">` : `<div class="contact-search-avatar">${initial}</div>`}
+                <div class="contact-search-info">
+                  <span class="contact-search-name">${escapeHtml(cName)}</span>
+                  <span class="contact-search-detail">${escapeHtml(cPhone)}</span>
+                </div>
+              </div>
+            `;
+          }).join('');
+
+          dropdown.querySelectorAll('.contact-search-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const selName = decodeURIComponent(item.getAttribute('data-name') || '');
+              const selPhone = decodeURIComponent(item.getAttribute('data-phone') || '');
+
+              if (nameInput) nameInput.value = selName;
+              if (phoneInput && selPhone && selPhone !== 'Sem telefone') {
+                phoneInput.value = selPhone;
+              }
+
+              dropdown.classList.add('hidden');
+              dropdown.innerHTML = '';
+              showToast(`Contato "${selName}" selecionado!`, 'info');
+            });
+          });
+
+        } catch (err) {
+          console.warn('Error searching contacts for attachment:', err);
+          dropdown.classList.add('hidden');
+        }
+      }, 280);
+    });
+  }
+
+  // Confirm Attach Contact
+  if (btnConfirm) {
+    btnConfirm.addEventListener('click', () => {
+      const name = nameInput ? nameInput.value.trim() : '';
+      const phone = phoneInput ? phoneInput.value.trim() : '';
+
+      if (!name || !phone) {
+        showToast('Preencha o nome e o telefone do contato.', 'error');
+        return;
+      }
+
+      const vCardFile = generateVCardFile(name, phone);
+      pendingAttachments.push(vCardFile);
+      renderAttachmentsPreview();
+
+      closeModal();
+      showToast(`Contato "${name}" anexado como vCard (WhatsApp)!`, 'success');
+    });
+  }
 }
 
 // TAB HANDLING
@@ -4152,6 +4462,13 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   const senderObj = conversation?.meta?.sender || conversation?.sender;
   const senderId = senderObj?.id;
 
+  let avatarUrl = '';
+  let phoneNumber = '';
+  if (conversation) {
+    avatarUrl = getSenderAvatarUrl(senderObj);
+    phoneNumber = senderObj?.phone_number || senderObj?.identifier || '';
+  }
+
   currentActiveChat = {
     id: conversationId,
     contactName: contactName,
@@ -4159,22 +4476,14 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
     inboxId: inboxId,
     contactId: senderId,
     senderId: senderId,
-    sender: senderObj
+    sender: senderObj,
+    phone: phoneNumber
   };
 
   currentChatMessages = [];
   hasOlderMessages = false;
   isLoadingOlderMessages = false;
   lastRenderedRawHtml = '';
-
-  elements.chatHeaderName.textContent = contactName;
-  
-  let avatarUrl = '';
-  let phoneNumber = '';
-  if (conversation) {
-    avatarUrl = getSenderAvatarUrl(senderObj);
-    phoneNumber = senderObj?.phone_number || senderObj?.identifier || '';
-  }
 
   elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, avatarUrl);
 
@@ -4194,8 +4503,11 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
           elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, fetchedAvatar);
         }
         const fetchedPhone = conv.meta?.sender?.phone_number || conv.meta?.sender?.identifier || '';
-        if (fetchedPhone && fetchedPhone !== phoneNumber) {
+        if (fetchedPhone) {
           phoneNumber = fetchedPhone;
+          if (currentActiveChat && currentActiveChat.id === conversationId) {
+            currentActiveChat.phone = fetchedPhone;
+          }
           getInboxName(accountId, inboxId).then(inboxName => {
             if (inboxName && currentActiveChat && currentActiveChat.id === conversationId) {
               elements.chatHeaderMeta.textContent = `${phoneNumber} • ${inboxName}`;
@@ -4537,16 +4849,108 @@ function renderChatMessages(messages, silent, isPrepend = false) {
       }
 
       let contentHtml = '';
+      let isTextContact = false;
+
+      // Check if message content is a text-formatted contact sent by WhatsApp/Chatwoot
       if (msg.content) {
-        contentHtml = `<span class="chat-msg-text">${formatWhatsAppMarkdown(msg.content)}</span>`;
+        const textContent = msg.content.trim();
+        const lowerText = textContent.toLowerCase();
+        const isContactTextPattern = lowerText.includes('contato:') || (lowerText.includes('nome:') && (lowerText.includes('número') || lowerText.includes('numero') || lowerText.includes('telefone')));
+        
+        if (isContactTextPattern) {
+          isTextContact = true;
+          let cardName = 'Contato';
+          let cardPhone = '';
+
+          const nameMatch = textContent.match(/Nome:\s*([^\r\n]+)/i);
+          if (nameMatch) cardName = nameMatch[1].replace(/^[\s\*_`"']+|[\s\*_`"']+$/g, '').trim();
+
+          const phoneMatch = textContent.match(/(?:Número|Numero|Telefone)(?:\s*\(\d+\))?:\s*([^\r\n]+)/i) || textContent.match(/\+?\d[\d\s\-\(\)]{7,}\d/);
+          if (phoneMatch) cardPhone = (phoneMatch[1] || phoneMatch[0]).replace(/^[\s\*_`"']+|[\s\*_`"']+$/g, '').trim();
+
+          const initial = cardName ? cardName.charAt(0).toUpperCase() : '👤';
+
+          // Check if contact phone matches current active conversation's contact phone or sender phone (own contact)
+          const headerMetaText = elements.chatHeaderMeta ? elements.chatHeaderMeta.textContent : '';
+          const headerPhoneMatch = headerMetaText ? headerMetaText.match(/\+?\d[\d\s\-\(\)]{7,}\d/) : null;
+          const headerPhone = headerPhoneMatch ? headerPhoneMatch[0] : '';
+
+          const activePhone = currentActiveChat?.phone || currentActiveChat?.sender?.phone_number || currentActiveChat?.sender?.identifier || headerPhone || '';
+          const isSelfContact = isSamePhoneNumber(cardPhone, activePhone);
+
+          const btnChatHtml = isSelfContact ? '' : `
+            <div class="whatsapp-card-divider"></div>
+            <button type="button" class="btn-whatsapp-card-chat" data-phone="${escapeHtml(cardPhone)}" data-name="${escapeHtml(cardName)}">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+              Conversar
+            </button>
+          `;
+
+          contentHtml = `
+            <div class="msg-attachment whatsapp-contact-card" style="margin-top: 0;">
+              <div class="whatsapp-card-header">
+                <div class="whatsapp-card-avatar">${initial}</div>
+                <div class="whatsapp-card-info">
+                  <span class="whatsapp-card-name">${escapeHtml(cardName)}</span>
+                  <span class="whatsapp-card-phone">${cardPhone ? escapeHtml(cardPhone) : 'Contato WhatsApp'}</span>
+                </div>
+              </div>
+              ${btnChatHtml}
+            </div>
+          `;
+        } else {
+          contentHtml = `<span class="chat-msg-text">${formatWhatsAppMarkdown(msg.content)}</span>`;
+        }
       }
 
-      // Render attachments (images, video players, audio players, files)
+      // Render attachments (images, video players, audio players, files, contacts/vCards)
       if (msg.attachments && msg.attachments.length > 0) {
         msg.attachments.forEach(att => {
           const filename = att.file_name || (att.data_url ? att.data_url.split('/').pop() : 'arquivo');
-          
-          if (att.file_type === 'image') {
+          const isVCard = (att.file_type === 'fallback' && (filename.toLowerCase().endsWith('.vcf') || (att.data_url && att.data_url.includes('.vcf')))) || att.file_type === 'vcard';
+
+          if (isVCard) {
+            let cardName = filename.replace(/\.vcf$/i, '').replace(/_/g, ' ');
+            let cardPhone = '';
+            
+            // Try extracting phone if embedded in filename or content
+            const phoneMatch = cardName.match(/\+?\d{8,15}/);
+            if (phoneMatch) {
+              cardPhone = phoneMatch[0];
+              cardName = cardName.replace(cardPhone, '').trim() || 'Contato';
+            }
+
+            const initial = cardName ? cardName.charAt(0).toUpperCase() : '👤';
+
+            // Check if contact phone matches current active conversation's contact phone or sender phone (own contact)
+            const headerMetaText = elements.chatHeaderMeta ? elements.chatHeaderMeta.textContent : '';
+            const headerPhoneMatch = headerMetaText ? headerMetaText.match(/\+?\d[\d\s\-\(\)]{7,}\d/) : null;
+            const headerPhone = headerPhoneMatch ? headerPhoneMatch[0] : '';
+
+            const activePhone = currentActiveChat?.phone || currentActiveChat?.sender?.phone_number || currentActiveChat?.sender?.identifier || headerPhone || '';
+            const isSelfContact = isSamePhoneNumber(cardPhone, activePhone);
+
+            const btnChatHtml = isSelfContact ? '' : `
+              <div class="whatsapp-card-divider"></div>
+              <button type="button" class="btn-whatsapp-card-chat" data-phone="${escapeHtml(cardPhone)}" data-name="${escapeHtml(cardName)}">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                Conversar
+              </button>
+            `;
+
+            contentHtml += `
+              <div class="msg-attachment whatsapp-contact-card">
+                <div class="whatsapp-card-header">
+                  <div class="whatsapp-card-avatar">${initial}</div>
+                  <div class="whatsapp-card-info">
+                    <span class="whatsapp-card-name">${escapeHtml(cardName)}</span>
+                    <span class="whatsapp-card-phone">${cardPhone ? escapeHtml(cardPhone) : 'Contato WhatsApp'}</span>
+                  </div>
+                </div>
+                ${btnChatHtml}
+              </div>
+            `;
+          } else if (att.file_type === 'image') {
             contentHtml += `
               <div class="msg-attachment image-attachment" style="margin-top: 4px;">
                 <img src="${att.data_url}" alt="Imagem" class="chat-img-preview" style="max-width: 100%; max-height: 180px; border-radius: 6px; cursor: pointer; object-fit: cover;" data-filename="${filename}">
@@ -5769,8 +6173,10 @@ function renderAttachmentsPreview() {
       };
       reader.readAsDataURL(file);
     } else {
+      const isVCard = (file.name && file.name.endsWith('.vcf')) || (file.type && file.type.includes('vcard'));
+      const icon = isVCard ? '🪪' : '📄';
       item.innerHTML = `
-        <div class="attachment-icon-placeholder">📄</div>
+        <div class="attachment-icon-placeholder">${icon}</div>
         <span class="attachment-name" title="${file.name}">${file.name}</span>
         <button type="button" class="btn-remove-attachment" title="Remover">&times;</button>
       `;

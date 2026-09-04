@@ -4663,6 +4663,160 @@ mark.search-highlight {
   color: #ef4444;
 }
 
+/* WhatsApp-style Attachment Options Popover Menu */
+.attach-menu-popover {
+  position: absolute;
+  bottom: 34px;
+  left: 0;
+  z-index: 1050;
+  background: #111827;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 170px;
+  backdrop-filter: blur(14px);
+  animation: scaleIn 0.12s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.attach-menu-item:hover {
+  background: rgba(31, 147, 255, 0.15);
+  color: #ffffff;
+}
+
+.attach-menu-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.attach-menu-icon.icon-files {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+}
+
+.attach-menu-icon.icon-contact {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.attach-menu-icon svg {
+  stroke: currentColor;
+}
+
+/* WhatsApp Native Contact Card Styling */
+.msg-attachment.whatsapp-contact-card {
+  width: 100%;
+  max-width: 280px;
+  background: rgba(6, 78, 59, 0.45);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.whatsapp-card-header {
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.whatsapp-card-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #10b981;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 16px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+
+.whatsapp-card-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.whatsapp-card-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.whatsapp-card-phone {
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.whatsapp-card-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  width: 100%;
+}
+
+.btn-whatsapp-card-chat {
+  width: 100%;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  color: #10b981;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-whatsapp-card-chat:hover {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+
 
 
 
