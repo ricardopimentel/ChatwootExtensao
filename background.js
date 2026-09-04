@@ -631,6 +631,81 @@ function extractConversationsArray(response) {
   return [];
 }
 
+function createSideBySideConversationWindow(url, callback) {
+  const winWidth = 380;
+  const winHeight = 560;
+  const gap = 12;
+
+  chrome.windows.getAll({ populate: true }, (windows) => {
+    const convWindows = windows.filter(w => 
+      w.type === 'popup' && w.tabs && w.tabs.some(t => t.url && (t.url.includes('convId=') || t.url.includes('popup.html')))
+    );
+
+    let targetLeft = undefined;
+    let targetTop = undefined;
+
+    if (convWindows.length > 0) {
+      const rightmost = convWindows.reduce((max, w) => ((w.left || 0) > (max.left || 0) ? w : max), convWindows[0]);
+      let nextLeft = (rightmost.left !== undefined ? rightmost.left : 100) + (rightmost.width || winWidth) + gap;
+      let nextTop = rightmost.top !== undefined ? rightmost.top : 80;
+
+      if (nextLeft + winWidth > 1920) {
+        const leftmost = convWindows.reduce((min, w) => ((w.left || 0) < (min.left || 0) ? w : min), convWindows[0]);
+        nextLeft = Math.max(10, (leftmost.left !== undefined ? leftmost.left : 50) + 30);
+        nextTop = nextTop + 40;
+      }
+
+      targetLeft = Math.round(nextLeft);
+      targetTop = Math.round(nextTop);
+    }
+
+    // Un-minimize / restore all existing conversation windows FIRST
+    convWindows.forEach(w => {
+      if (w && w.id) {
+        chrome.windows.update(w.id, { state: 'normal' }, () => {
+          if (chrome.runtime.lastError) {}
+        });
+      }
+    });
+
+    const createOptions = {
+      url: url,
+      type: 'popup',
+      width: winWidth,
+      height: winHeight,
+      focused: true
+    };
+
+    if (targetLeft !== undefined && targetTop !== undefined) {
+      createOptions.left = targetLeft;
+      createOptions.top = targetTop;
+    }
+
+    chrome.windows.create(createOptions, (newWin) => {
+      // Restore and bring ALL conversation windows back to front after Chrome finishes closing action popup
+      const restoreAllConvWindows = () => {
+        convWindows.forEach(w => {
+          if (w && w.id && newWin && w.id !== newWin.id) {
+            chrome.windows.update(w.id, { state: 'normal', focused: true }, () => {
+              if (chrome.runtime.lastError) {}
+            });
+          }
+        });
+        if (newWin && newWin.id) {
+          chrome.windows.update(newWin.id, { state: 'normal', focused: true }, () => {
+            if (chrome.runtime.lastError) {}
+          });
+        }
+      };
+
+      setTimeout(restoreAllConvWindows, 250);
+      setTimeout(restoreAllConvWindows, 600);
+
+      if (callback) callback(newWin);
+    });
+  });
+}
+
 function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
   const targetUrl = chrome.runtime.getURL(`popup.html?convId=${conversationId}`);
   
@@ -638,16 +713,10 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
     const existingTab = tabs.find(tab => tab.url && tab.url.startsWith(targetUrl));
     if (existingTab) {
       chrome.tabs.update(existingTab.id, { active: true });
-      chrome.windows.update(existingTab.windowId, { focused: true });
+      chrome.windows.update(existingTab.windowId, { state: 'normal', focused: true });
     } else {
       const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}`);
-      chrome.windows.create({
-        url: url,
-        type: 'popup',
-        width: 380,
-        height: 560,
-        focused: true
-      });
+      createSideBySideConversationWindow(url);
     }
   });
 }
