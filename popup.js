@@ -4633,7 +4633,11 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   isLoadingOlderMessages = false;
   lastRenderedRawHtml = '';
 
-  elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, avatarUrl);
+  if (elements.chatHeaderName) {
+    elements.chatHeaderName.textContent = contactName || senderObj?.name || 'Cliente';
+  }
+
+  elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName || senderObj?.name, avatarUrl);
 
   elements.chatHeaderMeta.textContent = phoneNumber ? `${phoneNumber} • Carregando caixa de entrada...` : 'Carregando caixa de entrada...';
   
@@ -4646,6 +4650,17 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
   chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}`)
     .then(conv => {
       if (conv && currentActiveChat && currentActiveChat.id === conversationId) {
+        const fetchedName = conv.meta?.sender?.name || conv.sender?.name;
+        if (fetchedName) {
+          contactName = fetchedName;
+          currentActiveChat.contactName = fetchedName;
+          if (elements.chatHeaderName) {
+            elements.chatHeaderName.textContent = fetchedName;
+          }
+          if (isChatWindowMode) {
+            document.title = `${fetchedName} - Chatwoot`;
+          }
+        }
         const fetchedAvatar = getSenderAvatarUrl(conv.meta?.sender || conv.sender);
         if (fetchedAvatar) {
           elements.chatHeaderAvatar.innerHTML = getAvatarContent(contactName, fetchedAvatar);
