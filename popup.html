@@ -68,6 +68,14 @@
               Em Atendimento
               <span class="filter-badge hidden" id="badge-filter-progress">0</span>
             </button>
+            <button class="filter-chip hidden" data-filter="mine" id="btn-filter-mine">
+              Minhas
+              <span class="filter-badge hidden" id="badge-filter-mine">0</span>
+            </button>
+            <button class="filter-chip hidden" data-filter="mentions" id="btn-filter-mentions">
+              Menções
+              <span class="filter-badge hidden" id="badge-filter-mentions">0</span>
+            </button>
             <button class="filter-chip" data-filter="resolved" id="btn-filter-resolved">Concluídas</button>
           </div>
 
@@ -99,6 +107,24 @@
               <button class="btn-action-icon" id="btn-chat-popout" title="Abrir em janela separada">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
               </button>
+              <!-- Assign Agent Button with popover -->
+              <div style="position: relative; display: inline-flex;">
+                <button class="btn-action-icon" id="btn-chat-assign" title="Atribuir Atendimento">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
+                </button>
+                <div class="assign-agent-popover hidden" id="assign-agent-popover">
+                  <div class="assign-popover-header">
+                    <span>Atribuir Conversa</span>
+                    <button type="button" class="btn-popover-close" id="btn-close-assign-popover">&times;</button>
+                  </div>
+                  <div class="assign-search-box">
+                    <input type="text" id="assign-agent-search" placeholder="Buscar atendente..." autocomplete="off">
+                  </div>
+                  <div class="assign-agents-list" id="assign-agents-list">
+                    <!-- Populated dynamically -->
+                  </div>
+                </div>
+              </div>
               <!-- Create Reminder Button -->
               <button class="btn-action-icon" id="btn-chat-reminder" title="Criar Lembrete para esta conversa">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
@@ -118,6 +144,9 @@
             </div>
           </div>
           
+          <!-- Floating Date Badge (WhatsApp Style) -->
+          <div class="chat-floating-date-badge" id="chat-floating-date-badge"></div>
+
           <div class="chat-messages-area" id="chat-messages-area">
             <!-- Chat bubbles populate here -->
           </div>
@@ -310,8 +339,6 @@
         </div>
       </section>
 
-
-      
       <!-- Tab: Reports -->
       <section id="reports" class="tab-pane">
         <div class="reports-header-row">
@@ -466,6 +493,14 @@
               </div>
             </form>
           </div>
+        </div>
+
+        <div class="reminders-toolbar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary);">Seus Lembretes</span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-export-reminders-csv" style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 4px 10px;" title="Exportar lembretes salvos para planilha CSV">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Exportar CSV
+          </button>
         </div>
 
         <div class="search-box">
@@ -995,6 +1030,43 @@
               <!-- Dynamically populated -->
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reminder Info Modal (Visualizar Lembretes do Contato) -->
+    <div class="modal-backdrop hidden" id="reminder-info-modal">
+      <div class="contact-info-card" style="max-width: 380px;">
+        <div class="contact-info-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="#f59e0b" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+            <h3 id="reminder-info-modal-title">Lembretes Anotados</h3>
+          </div>
+          <button type="button" class="btn-modal-close" id="btn-reminder-info-close" title="Fechar">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+        <div class="contact-info-body" style="padding: 14px 16px; align-items: stretch;">
+          <div class="contact-modal-avatar-container" style="margin-bottom: 6px;">
+            <div class="contact-modal-avatar-wrapper" style="cursor: default; width: 50px; height: 50px;">
+              <div class="contact-modal-avatar" id="reminder-modal-avatar" style="width: 50px; height: 50px; font-size: 18px;">U</div>
+            </div>
+            <h2 class="contact-modal-name" id="reminder-modal-contact-name" style="margin-top: 6px; font-size: 14px;">Nome do Contato</h2>
+            <p class="contact-modal-phone" id="reminder-modal-contact-phone" style="font-size: 11px;">+55 00 00000-0000</p>
+          </div>
+
+          <div id="reminder-modal-items-container" class="reminder-modal-items" style="display: flex; flex-direction: column; gap: 10px; max-height: 280px; overflow-y: auto; padding-right: 2px;">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+        <div class="contact-info-footer" style="padding: 10px 16px; background-color: var(--bg-tertiary); display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--border-color);">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-reminder-modal-new" style="display: flex; align-items: center; gap: 4px; font-size: 11px;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Novo Lembrete
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-reminder-modal-close-footer" style="font-size: 11px; padding: 4px 14px;">
+            Fechar
+          </button>
         </div>
       </div>
     </div>

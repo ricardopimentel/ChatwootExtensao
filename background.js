@@ -400,6 +400,28 @@ function handleWebSocketMessage(rawData) {
         });
       }
     }
+
+    // Process conversation update events (status/assignee changed)
+    if (data.message && (data.message.event === 'conversation.updated' || data.message.event === 'conversation.status_changed' || data.message.event === 'conversation.assignee_changed')) {
+      const convData = data.message.data;
+      if (convData && convData.id) {
+        if (convData.meta && convData.meta.assignee !== undefined) {
+          chrome.runtime.sendMessage({
+            action: 'conversationAssigneeChanged',
+            conversationId: convData.id,
+            accountId: convData.account_id,
+            assignee: convData.meta.assignee
+          }).catch(() => {});
+        }
+        if (convData.status) {
+          chrome.runtime.sendMessage({
+            action: 'conversationStatusChanged',
+            conversationId: convData.id,
+            status: convData.status
+          }).catch(() => {});
+        }
+      }
+    }
   } catch (err) {
     console.error('[Chatwoot Helper] Error handling WebSocket message:', err);
   }

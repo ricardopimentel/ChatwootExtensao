@@ -13,11 +13,14 @@ let currentTabInfo = {
   conversationId: '',
   inboxId: '',
   contactName: '',
+  contactId: '',
+  contactPhone: '',
   isChatwootConv: false
 };
 
 let activeTags = [];
 let availableLabels = [];
+let cachedReminders = [];
 
 // Conversations state
 let activeChatFilter = 'progress';
@@ -57,6 +60,10 @@ const elements = {
   tabPanes: document.querySelectorAll('.tab-pane'),
   apiStatus: document.getElementById('api-status'),
   
+  // Mentions Filter
+  btnFilterMentions: document.getElementById('btn-filter-mentions'),
+  badgeFilterMentions: document.getElementById('badge-filter-mentions'),
+
   // Tab: Reminders
   searchInput: document.getElementById('search-input'),
   remindersList: document.getElementById('reminders-list'),
@@ -181,6 +188,7 @@ const elements = {
   chatHeaderName: document.getElementById('chat-header-name'),
   chatHeaderMeta: document.getElementById('chat-header-meta'),
   chatMessagesArea: document.getElementById('chat-messages-area'),
+  chatFloatingDateBadge: document.getElementById('chat-floating-date-badge'),
   chatReplyBar: document.getElementById('chat-reply-bar'),
   chatReplyInput: document.getElementById('chat-reply-input'),
   btnTogglePrivateNote: document.getElementById('btn-toggle-private-note'),
@@ -440,6 +448,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       } else if (message.action === 'activeTabsChanged') {
         filterAndRenderConversations();
+      } else if (message.action === 'conversationAssigneeChanged') {
+        const updateAssignee = (arr) => {
+          const conversation = arr.find(c => c && c.id == message.conversationId);
+          if (conversation) {
+            if (!conversation.meta) conversation.meta = {};
+            conversation.meta.assignee = message.assignee;
+          }
+        };
+        updateAssignee(openConversationsCache);
+        updateAssignee(fetchedConversations);
+        if (currentActiveChat && currentActiveChat.id == message.conversationId) {
+          currentActiveChat.assignee = message.assignee;
+          updateChatAssignButtonUI(message.assignee);
+        }
+        updateMineFilterVisibility();
+        filterAndRenderConversations();
       } else if (message.action === 'conversationStatusChanged') {
         const markStatus = (arr) => {
           const conversation = arr.find(c => c && c.id == message.conversationId);
@@ -450,6 +474,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         markStatus(openConversationsCache);
         markStatus(fetchedConversations);
         updateUnreadBadgeLocal();
+        updateMineFilterVisibility();
         filterAndRenderConversations();
       }
     });
@@ -458,7 +483,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (isSelfSavingStorage) return;
       if (namespace === 'sync' || namespace === 'local') {
         if (changes.chatwootReminders) {
-          loadReminders(elements.searchInput?.value || '');
+          getRemindersFromStorage().then(() => {
+            updateChatReminderButtonState();
+            filterAndRenderConversations();
+            loadReminders(elements.searchInput?.value || '');
+          });
         }
         if (changes.chatwootSettings) {
           loadSettings().then(() => {
@@ -482,7 +511,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (config.url && config.token) {
       chatwootFetch('/api/v1/profile').then(profile => {
-        if (profile) currentUserId = profile.id;
+        if (profile) {
+          currentUserProfile = profile;
+          currentUserId = profile.id;
+          loadUserMentions(false).catch(() => {});
+        }
       }).catch(err => console.warn('Could not load profile on init:', err));
       restoreNavigationState();
     } else {
@@ -579,7 +612,84 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Chat header action buttons
   const btnChatReminder = document.getElementById('btn-chat-reminder');
   if (btnChatReminder) {
-    btnChatReminder.addEventListener('click', createReminderFromActiveChat);
+    btnChatReminder.addEventListener('click', () => {
+      if (!currentActiveChat) return;
+      const reminders = findRemindersForChat(currentActiveChat);
+      if (reminders && reminders.length > 0) {
+        openReminderInfoModal(reminders);
+      } else {
+        createReminderFromActiveChat();
+      }
+    });
+  }
+
+  // Assign agent button & popover
+  const btnChatAssign = document.getElementById('btn-chat-assign');
+  if (btnChatAssign) {
+    btnChatAssign.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleAssignAgentPopover();
+    });
+  }
+
+  const btnCloseAssignPopover = document.getElementById('btn-close-assign-popover');
+  if (btnCloseAssignPopover) {
+    btnCloseAssignPopover.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleAssignAgentPopover(false);
+    });
+  }
+
+  const assignAgentSearch = document.getElementById('assign-agent-search');
+  if (assignAgentSearch) {
+    assignAgentSearch.addEventListener('input', async () => {
+      if (currentActiveChat) {
+        const agents = await fetchAccountAgents(currentActiveChat.accountId);
+        renderAssignAgentsList(agents);
+      }
+    });
+  }
+
+  // Global click listener to close popover
+  document.addEventListener('click', (e) => {
+    const popover = document.getElementById('assign-agent-popover');
+    const btnAssign = document.getElementById('btn-chat-assign');
+    if (popover && !popover.classList.contains('hidden')) {
+      if (!popover.contains(e.target) && (!btnAssign || !btnAssign.contains(e.target))) {
+        toggleAssignAgentPopover(false);
+      }
+    }
+  });
+
+  // Reminder Info Modal handlers
+  const btnReminderInfoClose = document.getElementById('btn-reminder-info-close');
+  if (btnReminderInfoClose) {
+    btnReminderInfoClose.addEventListener('click', closeReminderInfoModal);
+  }
+  const btnReminderModalCloseFooter = document.getElementById('btn-reminder-modal-close-footer');
+  if (btnReminderModalCloseFooter) {
+    btnReminderModalCloseFooter.addEventListener('click', closeReminderInfoModal);
+  }
+  const btnReminderModalNew = document.getElementById('btn-reminder-modal-new');
+  if (btnReminderModalNew) {
+    btnReminderModalNew.addEventListener('click', () => {
+      closeReminderInfoModal();
+      createReminderFromActiveChat();
+    });
+  }
+  const reminderInfoModal = document.getElementById('reminder-info-modal');
+  if (reminderInfoModal) {
+    reminderInfoModal.addEventListener('click', (e) => {
+      if (e.target === reminderInfoModal) {
+        closeReminderInfoModal();
+      }
+    });
+  }
+
+  // Export reminders CSV button
+  const btnExportCsv = document.getElementById('btn-export-reminders-csv');
+  if (btnExportCsv) {
+    btnExportCsv.addEventListener('click', exportRemindersToCSV);
   }
 
   const btnReminderBackToChat = document.getElementById('btn-reminder-back-to-chat');
@@ -1415,6 +1525,8 @@ function switchTab(tabId) {
     }
   } else if (tabId === 'save-current') {
     checkActiveTab();
+  } else if (tabId === 'mentions') {
+    loadUserMentions();
   } else if (tabId === 'reminders') {
     loadReminders();
   } else if (tabId === 'reports') {
@@ -1512,6 +1624,7 @@ async function getRemindersFromStorage() {
         });
 
         const mergedList = Array.from(mergedMap.values());
+        cachedReminders = mergedList;
         resolve(mergedList);
       });
     });
@@ -1528,6 +1641,8 @@ async function saveRemindersToStorage(list) {
       conversationId: String(item.conversationId || ''),
       inboxId: String(item.inboxId || ''),
       contactName: String(item.contactName || 'Cliente'),
+      contactId: String(item.contactId || ''),
+      contactPhone: String(item.contactPhone || item.phone || ''),
       title: String(item.title || ''),
       tags: Array.isArray(item.tags) ? item.tags : [],
       notes: String(item.notes || '').substring(0, 1000),
@@ -1558,6 +1673,7 @@ async function saveRemindersToStorage(list) {
           if (chrome.runtime.lastError) {
             console.warn('[Storage] Sync reminders save notice:', chrome.runtime.lastError.message);
           }
+          cachedReminders = sanitized;
           setTimeout(() => { isSelfSavingStorage = false; }, 400);
           resolve(sanitized);
         });
@@ -2221,6 +2337,8 @@ async function loadConversationContactInfo() {
     const identifier = contact?.phone_number || contact?.email || '';
     
     currentTabInfo.contactName = name;
+    currentTabInfo.contactId = contact?.id || '';
+    currentTabInfo.contactPhone = contact?.phone_number || contact?.identifier || '';
     currentTabInfo.inboxId = convData?.inbox_id || '';
     elements.saveContactInfo.innerHTML = `Contato: <span class="highlight">${name}</span> ${identifier ? `(${identifier})` : ''}`;
     elements.saveTitle.value = `Retornar com ${name}`;
@@ -2366,6 +2484,8 @@ async function handleSaveCurrentSubmit(e) {
     conversationId: currentTabInfo.conversationId,
     inboxId: currentTabInfo.inboxId || '',
     contactName: currentTabInfo.contactName || 'Cliente',
+    contactId: currentTabInfo.contactId || '',
+    contactPhone: currentTabInfo.contactPhone || '',
     title: title,
     tags: [...activeTags],
     notes: notes,
@@ -2531,6 +2651,8 @@ async function loadReminders(searchQuery = '') {
           currentTabInfo.accountId = item.accountId;
           currentTabInfo.conversationId = item.conversationId;
           currentTabInfo.contactName = item.contactName;
+          currentTabInfo.contactId = item.contactId || '';
+          currentTabInfo.contactPhone = item.contactPhone || '';
           currentTabInfo.inboxId = item.inboxId || '';
           currentTabInfo.url = item.url || `${config.url}/app/accounts/${item.accountId}/conversations/${item.conversationId}`;
 
@@ -3442,6 +3564,87 @@ function formatRelativeTime(timestamp) {
   return date.toLocaleDateString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
+function getMessageDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function formatChatDateLabel(dateInput) {
+  const date = typeof dateInput === 'number' ? new Date(dateInput * 1000) : new Date(dateInput);
+  if (isNaN(date.getTime())) return '';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  
+  const diffTime = today.getTime() - target.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) {
+    return 'Hoje';
+  }
+  if (diffDays === 1) {
+    return 'Ontem';
+  }
+  if (diffDays > 1 && diffDays < 7) {
+    const weekday = date.toLocaleDateString('pt-BR', { weekday: 'long' });
+    return weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  }
+  
+  const day = date.getDate();
+  const monthName = date.toLocaleDateString('pt-BR', { month: 'long' });
+  const capitalizedMonth = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${day} de ${capitalizedMonth}`;
+  } else {
+    return `${day} de ${capitalizedMonth} de ${date.getFullYear()}`;
+  }
+}
+
+let floatingDateScrollTimer = null;
+function updateFloatingDateOnScroll() {
+  const container = elements.chatMessagesArea;
+  const badge = elements.chatFloatingDateBadge;
+  if (!container || !badge) return;
+
+  const separators = container.querySelectorAll('.chat-date-separator');
+  if (separators.length === 0) {
+    badge.classList.remove('visible');
+    return;
+  }
+
+  const containerRect = container.getBoundingClientRect();
+  const threshold = containerRect.top + 80;
+  let activeLabel = separators[0].getAttribute('data-date-label') || '';
+
+  for (let i = 0; i < separators.length; i++) {
+    const sep = separators[i];
+    const rect = sep.getBoundingClientRect();
+    if (rect.top <= threshold) {
+      activeLabel = sep.getAttribute('data-date-label') || activeLabel;
+    } else {
+      break;
+    }
+  }
+
+  if (activeLabel) {
+    if (badge.textContent !== activeLabel) {
+      badge.textContent = activeLabel;
+    }
+    badge.classList.add('visible');
+
+    if (floatingDateScrollTimer) {
+      clearTimeout(floatingDateScrollTimer);
+    }
+    floatingDateScrollTimer = setTimeout(() => {
+      badge.classList.remove('visible');
+    }, 1500);
+  }
+}
+
 function deleteConversationNotifications(accountId, conversationId) {
   chrome.storage.sync.get(['chatwootNotifications'], (result) => {
     const list = result.chatwootNotifications || [];
@@ -3870,7 +4073,17 @@ async function loadConversations() {
       }
     });
 
+    if (!currentUserId) {
+      try {
+        const profile = await chatwootFetch('/api/v1/profile');
+        if (profile && profile.id) currentUserId = profile.id;
+      } catch (e) {}
+    }
+
     updateFilterBadges(progressUnreadCount);
+    updateMineFilterVisibility();
+    updateMentionsFilterVisibility();
+    loadUserMentions(false).catch(() => {});
 
     filterAndRenderConversations();
   } catch (err) {
@@ -4073,11 +4286,29 @@ function filterAndRenderConversations() {
     const rawQuery = elements.chatsSearchInput ? elements.chatsSearchInput.value : '';
     const query = rawQuery.trim();
     const normalizedQuery = normalizeSearchString(query);
+
+    // If active filter is 'mentions', render mentions directly into chatsList
+    if (activeChatFilter === 'mentions') {
+      if (elements.chatsDefaultFilterBar) elements.chatsDefaultFilterBar.classList.remove('hidden');
+      if (elements.chatsSearchFilterBar) elements.chatsSearchFilterBar.classList.add('hidden');
+      if (elements.btnChatsSearchClear) {
+        if (query) {
+          elements.btnChatsSearchClear.classList.remove('hidden');
+        } else {
+          elements.btnChatsSearchClear.classList.add('hidden');
+        }
+      }
+      renderUserMentionsList(cachedUserMentions, elements.chatsList, query);
+      return;
+    }
     
     // Decide which source array to use based on active filter
     let sourceConversations;
     if (activeChatFilter === 'resolved') {
       sourceConversations = fetchedConversations.filter(item => item && item.status === 'resolved');
+    } else if (activeChatFilter === 'mine') {
+      const openSource = openConversationsCache.length > 0 ? openConversationsCache : fetchedConversations;
+      sourceConversations = openSource.filter(item => item && item.status !== 'resolved' && currentUserId && Number(item.meta?.assignee?.id) === Number(currentUserId));
     } else {
       const openSource = openConversationsCache.length > 0 ? openConversationsCache : fetchedConversations;
       sourceConversations = openSource.filter(item => item && item.status !== 'resolved');
@@ -4269,9 +4500,15 @@ function createConversationCardElement(item, accountId, searchQuery, openIds) {
     item.unread_count = 0;
   }
 
-  const contactName = item.meta?.sender?.name || 'Cliente';
+  const rawContactName = (item.meta?.sender?.name || item.sender?.name || '').trim();
+  const phoneNumber = item.meta?.sender?.phone_number || item.sender?.phone_number || item.meta?.sender?.identifier || '';
+
+  // Detect placeholder/invalid names (e.g. '.', '-', '_', empty or same as phone)
+  const isPlaceholderName = !rawContactName || rawContactName === '.' || rawContactName === '-' || rawContactName === '_' || rawContactName === phoneNumber;
+  const effectiveDisplayName = isPlaceholderName ? (phoneNumber || 'Cliente') : rawContactName;
+  const avatarName = effectiveDisplayName;
   const avatarUrl = getSenderAvatarUrl(item.meta?.sender || item.sender);
-  const avatarContent = getAvatarContent(contactName, avatarUrl);
+  const avatarContent = getAvatarContent(avatarName, avatarUrl);
   
   const lastMsgObj = Array.isArray(item.messages) && item.messages.length > 0 ? item.messages[item.messages.length - 1] : null;
   let lastMsgText = 'Nova conversa criada';
@@ -4282,6 +4519,12 @@ function createConversationCardElement(item, accountId, searchQuery, openIds) {
     isMatchSnippet = true;
   } else if (lastMsgObj) {
     lastMsgText = lastMsgObj.content || 'Nova mensagem (mídia/anexo)';
+    // Clean raw Chatwoot mention markdown e.g. [@Agent Name](mention://user/123/Agent%20Name) -> @Agent Name
+    lastMsgText = lastMsgText.replace(/\[@([^\]]+)\]\(mention:\/\/user\/\d+\/[^\)]+\)/g, '@$1');
+    // If private note, indicate with lock icon
+    if (lastMsgObj.private === true || lastMsgObj.message_type === 2 || lastMsgObj.message_type === 'private') {
+      lastMsgText = `🔒 ${lastMsgText}`;
+    }
   }
 
   const timestamp = item.last_activity_at || item.timestamp;
@@ -4295,14 +4538,36 @@ function createConversationCardElement(item, accountId, searchQuery, openIds) {
     itemClass += ' unread';
   }
 
-  const badgeHtml = isOpenWindow 
-    ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>`
-    : (isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '');
+  const unreadBadgeHtml = isUnread ? `<span class="chat-item-badge">${item.unread_count}</span>` : '';
+  const openTagHtml = isOpenWindow ? `<span class="chat-item-open-tag" title="Conversa aberta em uma janela flutuante">🌐 Aberta</span>` : '';
 
-  const phoneNumber = item.meta?.sender?.phone_number || item.meta?.sender?.identifier || '';
-  const displayNameHtml = searchQuery ? highlightSearchTerm(contactName, searchQuery) : escapeHtml(contactName);
+  const displayNameHtml = searchQuery ? highlightSearchTerm(effectiveDisplayName, searchQuery) : escapeHtml(effectiveDisplayName);
   const displayPhoneHtml = searchQuery && phoneNumber ? highlightSearchTerm(phoneNumber, searchQuery) : escapeHtml(phoneNumber);
   const displayMsgHtml = searchQuery ? highlightSearchTerm(lastMsgText, searchQuery) : escapeHtml(lastMsgText);
+
+  let headerTitleHtml = displayNameHtml;
+  if (!isPlaceholderName && phoneNumber) {
+    headerTitleHtml += ` <span class="chat-item-inline-phone">• ${displayPhoneHtml}</span>`;
+  }
+
+  const assignee = item.meta?.assignee;
+  let assigneeTagHtml = '';
+  if (assignee && assignee.name) {
+    const firstName = assignee.name.trim().split(/\s+/)[0];
+    assigneeTagHtml = `<span class="chat-item-tag chat-item-assignee-tag" title="Atribuído a: ${escapeHtml(assignee.name)}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>${escapeHtml(firstName)}</span>`;
+  }
+
+  const remindersForThis = findRemindersForChat({
+    id: item.id,
+    accountId: accountId,
+    contactId: item.meta?.sender?.id || item.sender?.id,
+    phone: phoneNumber
+  });
+  let reminderTagHtml = '';
+  if (remindersForThis && remindersForThis.length > 0) {
+    const rTitle = remindersForThis[0].title || 'Lembrete';
+    reminderTagHtml = `<span class="chat-item-tag chat-item-reminder-tag" title="Lembrete: ${escapeHtml(rTitle)}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="10" height="10" fill="currentColor" stroke="currentColor" stroke-width="1"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>Lembrete</span>`;
+  }
 
   const card = document.createElement('div');
   card.className = itemClass;
@@ -4311,22 +4576,24 @@ function createConversationCardElement(item, accountId, searchQuery, openIds) {
     <div class="chat-item-avatar">${avatarContent}</div>
     <div class="chat-item-content">
       <div class="chat-item-top">
-        <span class="chat-item-name">${displayNameHtml}</span>
+        <span class="chat-item-name">${headerTitleHtml}</span>
         <span class="chat-item-time">${timeStr}</span>
       </div>
-      ${phoneNumber ? `<div class="chat-item-phone">${displayPhoneHtml}</div>` : ''}
       <div class="chat-item-bottom">
         <span class="chat-item-msg ${isMatchSnippet ? 'matching-msg' : ''}">${displayMsgHtml}</span>
-        <div class="chat-item-meta">
-          <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
-          ${badgeHtml}
-        </div>
+        ${unreadBadgeHtml}
+      </div>
+      <div class="chat-item-tags-row">
+        <span class="chat-item-inbox inbox-name-badge" data-acc="${accountId}" data-inbox="${item.inbox_id}"></span>
+        ${assigneeTagHtml}
+        ${reminderTagHtml}
+        ${openTagHtml}
       </div>
     </div>
   `;
 
   card.addEventListener('click', () => {
-    openConversationInWindow(item.id, contactName, accountId, item.inbox_id);
+    openConversationInWindow(item.id, effectiveDisplayName, accountId, item.inbox_id);
   });
 
   return card;
@@ -4536,6 +4803,7 @@ function updateUnreadBadgeLocal() {
     }
   });
   updateFilterBadges(progressUnread);
+  updateMineFilterVisibility();
 }
 
 function updateFilterBadges(progressCount) {
@@ -4595,7 +4863,7 @@ function stopActiveConversationHeartbeat(convId) {
   }
 }
 
-function openConversationChat(conversationId, contactName, accountId, inboxId) {
+function openConversationChat(conversationId, contactName, accountId, inboxId, targetMessageId = null) {
   startActiveConversationHeartbeat(conversationId);
   switchTab('chats');
   // Collapse formatting toolbar and emoji picker by default
@@ -4625,13 +4893,23 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
     contactId: senderId,
     senderId: senderId,
     sender: senderObj,
-    phone: phoneNumber
+    phone: phoneNumber,
+    assignee: conversation?.meta?.assignee || null,
+    targetMessageId: targetMessageId ? String(targetMessageId) : null
   };
+
+  updateChatAssignButtonUI(currentActiveChat.assignee);
+  updateChatReminderButtonState();
 
   currentChatMessages = [];
   hasOlderMessages = false;
   isLoadingOlderMessages = false;
   lastRenderedRawHtml = '';
+
+  if (elements.chatFloatingDateBadge) {
+    elements.chatFloatingDateBadge.classList.remove('visible');
+    elements.chatFloatingDateBadge.textContent = '';
+  }
 
   if (elements.chatHeaderName) {
     elements.chatHeaderName.textContent = contactName || senderObj?.name || 'Cliente';
@@ -4677,6 +4955,14 @@ function openConversationChat(conversationId, contactName, accountId, inboxId) {
             }
           });
         }
+        if (conv.meta?.assignee !== undefined) {
+          currentActiveChat.assignee = conv.meta?.assignee;
+          updateChatAssignButtonUI(currentActiveChat.assignee);
+        }
+        if (conv.meta?.sender?.id) {
+          currentActiveChat.contactId = conv.meta.sender.id;
+        }
+        updateChatReminderButtonState();
       }
     }).catch(err => console.warn('Could not fetch conversation details:', err));
 
@@ -4857,7 +5143,7 @@ function createSideBySideConversationWindow(url, callback) {
   });
 }
 
-function openConversationInWindow(conversationId, contactName, accountId, inboxId) {
+function openConversationInWindow(conversationId, contactName, accountId, inboxId, targetMsgId = null) {
   const strConvId = String(conversationId);
   startActiveConversationHeartbeat(strConvId);
   
@@ -4927,7 +5213,7 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
           chrome.tabs.update(existingTab.id, { active: true }).catch(() => {});
           chrome.windows.update(existingTab.windowId, { state: 'normal', focused: true }).catch(() => {});
         } else {
-          const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}`);
+          const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}${targetMsgId ? `&targetMsgId=${targetMsgId}` : ''}`);
           createSideBySideConversationWindow(url);
         }
       });
@@ -4984,6 +5270,26 @@ async function loadChatMessages(accountId, conversationId, silent = false, befor
     });
 
     renderChatMessages(currentChatMessages, silent, beforeId !== null);
+
+    // If a target message ID was requested (e.g. from Mentions tab), locate and highlight it
+    if (currentActiveChat && currentActiveChat.targetMessageId) {
+      const targetId = currentActiveChat.targetMessageId;
+      const found = currentChatMessages.some(m => String(m.id) === String(targetId));
+
+      if (found) {
+        currentActiveChat.targetMessageId = null;
+        setTimeout(() => {
+          scrollToMessageId(targetId);
+        }, 250);
+      } else if (hasOlderMessages && currentChatMessages.length < 120) {
+        const oldest = currentChatMessages[0];
+        if (oldest && oldest.id) {
+          loadChatMessages(accountId, conversationId, true, oldest.id);
+        }
+      } else {
+        currentActiveChat.targetMessageId = null;
+      }
+    }
   } catch (err) {
     console.error('Error loading chat messages:', err);
     if (!silent && currentChatMessages.length === 0) {
@@ -5070,7 +5376,25 @@ function renderChatMessages(messages, silent, isPrepend = false) {
   if (activeMessages.length === 0) {
     messagesHtml = '<div style="text-align:center; padding:20px; color:var(--text-muted);">Nenhuma mensagem nesta conversa.</div>';
   } else {
+    let lastDateKey = null;
+
     activeMessages.forEach(msg => {
+      // Date Separator (WhatsApp style)
+      const timestampSec = msg.created_at || msg.timestamp;
+      if (timestampSec) {
+        const msgDate = new Date(timestampSec * 1000);
+        const msgDateKey = getMessageDateKey(msgDate);
+        if (msgDateKey && msgDateKey !== lastDateKey) {
+          lastDateKey = msgDateKey;
+          const dateLabel = formatChatDateLabel(timestampSec);
+          messagesHtml += `
+            <div class="chat-date-separator" data-date="${msgDateKey}" data-date-label="${escapeHtml(dateLabel)}">
+              <span class="chat-date-separator-pill">${escapeHtml(dateLabel)}</span>
+            </div>
+          `;
+        }
+      }
+
       const type = msg.message_type;
       const isActivity = type === 2 || type === 'activity';
       const isPrivateNote = (msg.private === true || type === 'private') && !isActivity;
@@ -5406,6 +5730,8 @@ function renderChatMessages(messages, silent, isPrepend = false) {
 }
 
 function closeChatView() {
+  toggleAssignAgentPopover(false);
+  closeReminderInfoModal();
   if (isChatWindowMode) {
     stopActiveConversationHeartbeat(currentActiveChat?.id);
     window.close();
@@ -5442,13 +5768,15 @@ function closeChatView() {
 function createReminderFromActiveChat() {
   if (!currentActiveChat) return;
 
-  const { id: conversationId, accountId, contactName, inboxId } = currentActiveChat;
+  const { id: conversationId, accountId, contactName, inboxId, contactId, senderId, phone } = currentActiveChat;
 
   // Pre-populate currentTabInfo with active chat data to bypass browser tab URL checking
   currentTabInfo.isChatwootConv = true;
   currentTabInfo.accountId = accountId;
   currentTabInfo.conversationId = conversationId;
   currentTabInfo.contactName = contactName;
+  currentTabInfo.contactId = contactId || senderId || '';
+  currentTabInfo.contactPhone = phone || '';
   currentTabInfo.inboxId = inboxId || '';
   currentTabInfo.url = `${config.url}/app/accounts/${accountId}/conversations/${conversationId}`;
 
@@ -5481,6 +5809,831 @@ function createReminderFromActiveChat() {
 
   // Focus title input
   elements.saveTitle.focus();
+}
+
+// ==========================================
+// REMINDER MATCHING & MODAL HELPERS
+// ==========================================
+
+function findRemindersForChat(chatOrConv) {
+  if (!chatOrConv || !Array.isArray(cachedReminders) || cachedReminders.length === 0) return [];
+  const convId = String(chatOrConv.id || chatOrConv.conversationId || '');
+  const accId = String(chatOrConv.accountId || chatOrConv.account_id || '');
+  const contactId = String(chatOrConv.contactId || chatOrConv.senderId || chatOrConv.meta?.sender?.id || chatOrConv.sender?.id || '');
+  const rawPhone = String(chatOrConv.phone || chatOrConv.contactPhone || chatOrConv.meta?.sender?.phone_number || chatOrConv.sender?.phone_number || chatOrConv.meta?.sender?.identifier || '');
+
+  return cachedReminders.filter(rem => {
+    if (!rem) return false;
+    // 1. Direct match by conversation ID & account ID
+    if (convId && String(rem.conversationId) === convId) {
+      if (!accId || !rem.accountId || String(rem.accountId) === accId) {
+        return true;
+      }
+    }
+    // 2. Match by Contact ID
+    if (contactId && rem.contactId && String(rem.contactId) === contactId) {
+      return true;
+    }
+    // 3. Match by phone number
+    if (rawPhone && rem.contactPhone) {
+      if (typeof isSamePhoneNumber === 'function' && isSamePhoneNumber(rawPhone, rem.contactPhone)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function updateChatReminderButtonState() {
+  const btn = document.getElementById('btn-chat-reminder');
+  if (!btn || !currentActiveChat) return;
+
+  const reminders = findRemindersForChat(currentActiveChat);
+  if (reminders.length > 0) {
+    btn.classList.add('has-reminder');
+    btn.setAttribute('title', `Ver ${reminders.length === 1 ? 'Lembrete Anotado' : `${reminders.length} Lembretes Anotados`} para este contato`);
+  } else {
+    btn.classList.remove('has-reminder');
+    btn.setAttribute('title', 'Criar Lembrete para esta conversa');
+  }
+}
+
+function openReminderInfoModal(reminders) {
+  const modal = document.getElementById('reminder-info-modal');
+  if (!modal || !currentActiveChat) return;
+
+  const contactName = currentActiveChat.contactName || 'Cliente';
+  const phone = currentActiveChat.phone || '';
+  const avatarUrl = getSenderAvatarUrl(currentActiveChat.sender);
+
+  const modalName = document.getElementById('reminder-modal-contact-name');
+  const modalPhone = document.getElementById('reminder-modal-contact-phone');
+  const modalAvatar = document.getElementById('reminder-modal-avatar');
+  const container = document.getElementById('reminder-modal-items-container');
+
+  if (modalName) modalName.textContent = contactName;
+  if (modalPhone) modalPhone.textContent = phone || 'Sem número informado';
+  if (modalAvatar) {
+    modalAvatar.innerHTML = getAvatarContent(contactName, avatarUrl);
+  }
+
+  if (container) {
+    container.innerHTML = '';
+    reminders.forEach(rem => {
+      const itemEl = document.createElement('div');
+      itemEl.className = 'reminder-modal-item';
+
+      let alarmHtml = '';
+      if (rem.alarmTime) {
+        const date = new Date(rem.alarmTime);
+        const dateStr = date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        const hasPassed = date.getTime() <= Date.now();
+        alarmHtml = `
+          <div class="reminder-modal-item-alarm ${hasPassed ? 'passed' : ''}">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            ${hasPassed ? 'Alarme expirado' : 'Alarme programado'}: ${dateStr}
+          </div>
+        `;
+      }
+
+      let tagsHtml = '';
+      if (Array.isArray(rem.tags) && rem.tags.length > 0) {
+        tagsHtml = '<div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">';
+        rem.tags.forEach(t => {
+          tagsHtml += `<span class="tag-badge" style="font-size: 10px; padding: 1px 6px;">${escapeHtml(t)}</span>`;
+        });
+        tagsHtml += '</div>';
+      }
+
+      let notesHtml = '';
+      if (rem.notes && rem.notes.trim()) {
+        notesHtml = `<div class="reminder-modal-item-notes">${escapeHtml(rem.notes)}</div>`;
+      } else {
+        notesHtml = `<div class="reminder-modal-item-notes" style="font-style: italic; color: var(--text-muted);">Sem notas adicionais</div>`;
+      }
+
+      itemEl.innerHTML = `
+        <div class="reminder-modal-item-header">
+          <h4 class="reminder-modal-item-title">${escapeHtml(rem.title || 'Lembrete')}</h4>
+          <div class="reminder-modal-item-actions">
+            <button type="button" class="btn-action-icon btn-edit-modal-reminder" data-id="${rem.id}" title="Editar este lembrete" style="padding: 2px 4px;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+            </button>
+            <button type="button" class="btn-action-icon delete btn-delete-modal-reminder" data-id="${rem.id}" title="Excluir este lembrete" style="padding: 2px 4px; color: var(--danger);">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </div>
+        </div>
+        ${alarmHtml}
+        ${notesHtml}
+        ${tagsHtml}
+      `;
+
+      const btnEdit = itemEl.querySelector('.btn-edit-modal-reminder');
+      if (btnEdit) {
+        btnEdit.addEventListener('click', () => {
+          closeReminderInfoModal();
+          currentTabInfo.isChatwootConv = true;
+          currentTabInfo.accountId = rem.accountId;
+          currentTabInfo.conversationId = rem.conversationId;
+          currentTabInfo.contactName = rem.contactName;
+          currentTabInfo.contactId = rem.contactId || '';
+          currentTabInfo.contactPhone = rem.contactPhone || '';
+          currentTabInfo.inboxId = rem.inboxId || '';
+          currentTabInfo.url = rem.url || `${config.url}/app/accounts/${rem.accountId}/conversations/${rem.conversationId}`;
+
+          elements.saveTitle.value = rem.title || '';
+          elements.saveNotes.value = rem.notes || '';
+
+          if (rem.alarmTime) {
+            elements.saveAlarmEnable.checked = true;
+            elements.saveAlarmDatetimeWrapper.classList.remove('hidden');
+            elements.saveAlarmDatetime.value = formatTimestampToLocalDatetime(rem.alarmTime);
+          } else {
+            elements.saveAlarmEnable.checked = false;
+            elements.saveAlarmDatetimeWrapper.classList.add('hidden');
+            elements.saveAlarmDatetime.value = '';
+          }
+
+          activeTags = Array.isArray(rem.tags) ? [...rem.tags] : [];
+          renderTags();
+
+          elements.notChatwootWarning.classList.add('hidden');
+          elements.saveCurrentForm.classList.remove('hidden');
+
+          const quickReminderSection = document.getElementById('quick-reminder-section');
+          if (quickReminderSection) {
+            quickReminderSection.classList.remove('hidden');
+          }
+
+          switchTab('reminders');
+          elements.saveTitle.focus();
+        });
+      }
+
+      const btnDel = itemEl.querySelector('.btn-delete-modal-reminder');
+      if (btnDel) {
+        btnDel.addEventListener('click', async () => {
+          if (confirm('Deseja excluir este lembrete?')) {
+            await deleteReminder(rem.id);
+            itemEl.remove();
+            const updated = findRemindersForChat(currentActiveChat);
+            updateChatReminderButtonState();
+            filterAndRenderConversations();
+            if (updated.length === 0) {
+              closeReminderInfoModal();
+            }
+          }
+        });
+      }
+
+      container.appendChild(itemEl);
+    });
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeReminderInfoModal() {
+  const modal = document.getElementById('reminder-info-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// ==========================================
+// AGENT ASSIGNMENT & "MINHAS" TAB HELPERS
+// ==========================================
+
+function updateChatAssignButtonUI(assignee) {
+  const btn = document.getElementById('btn-chat-assign');
+  if (!btn) return;
+  if (assignee && assignee.name) {
+    btn.classList.add('is-assigned');
+    btn.setAttribute('title', `Atribuído a: ${assignee.name}`);
+  } else {
+    btn.classList.remove('is-assigned');
+    btn.setAttribute('title', 'Atribuir Atendimento (Não atribuído)');
+  }
+}
+
+async function toggleAssignAgentPopover(show) {
+  const popover = document.getElementById('assign-agent-popover');
+  if (!popover || !currentActiveChat) return;
+
+  const shouldOpen = show !== undefined ? show : popover.classList.contains('hidden');
+  if (!shouldOpen) {
+    popover.classList.add('hidden');
+    return;
+  }
+
+  popover.classList.remove('hidden');
+  const searchInput = document.getElementById('assign-agent-search');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.focus();
+  }
+
+  const listEl = document.getElementById('assign-agents-list');
+  if (listEl) {
+    listEl.innerHTML = '<div style="padding: 10px; text-align: center; color: var(--text-muted); font-size: 11px;">Carregando atendentes...</div>';
+  }
+
+  const agents = await fetchAccountAgents(currentActiveChat.accountId);
+  renderAssignAgentsList(agents);
+}
+
+function renderAssignAgentsList(agents) {
+  const listEl = document.getElementById('assign-agents-list');
+  if (!listEl || !currentActiveChat) return;
+
+  const currentAssigneeId = currentActiveChat.assignee ? Number(currentActiveChat.assignee.id) : null;
+  const searchVal = (document.getElementById('assign-agent-search')?.value || '').trim().toLowerCase();
+
+  const filtered = (agents || []).filter(a => {
+    if (!searchVal) return true;
+    return (a.name || '').toLowerCase().includes(searchVal) || (a.email || '').toLowerCase().includes(searchVal);
+  });
+
+  listEl.innerHTML = '';
+
+  // 1. "Não atribuído" option
+  const unassignedItem = document.createElement('div');
+  unassignedItem.className = `assign-agent-item ${!currentAssigneeId ? 'active' : ''}`;
+  unassignedItem.innerHTML = `
+    <div class="assign-agent-avatar" style="background: var(--bg-tertiary); color: var(--text-muted);">✕</div>
+    <span class="assign-agent-name">Não atribuído</span>
+    ${!currentAssigneeId ? '<span style="color: var(--accent-color); font-weight: bold;">✓</span>' : ''}
+  `;
+  unassignedItem.addEventListener('click', () => {
+    assignCurrentConversation(null);
+  });
+  listEl.appendChild(unassignedItem);
+
+  // 2. Agent options
+  filtered.forEach(agent => {
+    const isMe = currentUserId && Number(agent.id) === Number(currentUserId);
+    const isActive = currentAssigneeId && Number(agent.id) === currentAssigneeId;
+    const itemEl = document.createElement('div');
+    itemEl.className = `assign-agent-item ${isActive ? 'active' : ''}`;
+
+    const avatarUrl = getSenderAvatarUrl(agent);
+    const avatarContent = getAvatarContent(agent.name, avatarUrl);
+
+    itemEl.innerHTML = `
+      <div class="assign-agent-avatar">${avatarContent}</div>
+      <span class="assign-agent-name">${escapeHtml(agent.name)} ${isMe ? '<strong class="assign-agent-me-tag">(Você)</strong>' : ''}</span>
+      ${isActive ? '<span style="color: #c084fc; font-weight: bold;">✓</span>' : ''}
+    `;
+    itemEl.addEventListener('click', () => {
+      assignCurrentConversation(agent);
+    });
+    listEl.appendChild(itemEl);
+  });
+
+  if (filtered.length === 0 && searchVal) {
+    listEl.innerHTML += '<div style="padding: 8px; text-align: center; color: var(--text-muted); font-size: 11px;">Nenhum atendente encontrado</div>';
+  }
+}
+
+async function assignCurrentConversation(agent) {
+  if (!currentActiveChat) return;
+  const { id: conversationId, accountId } = currentActiveChat;
+  toggleAssignAgentPopover(false);
+
+  try {
+    const payload = { assignee_id: agent ? agent.id : null };
+    await chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${conversationId}/assignments`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+
+    currentActiveChat.assignee = agent;
+    updateChatAssignButtonUI(agent);
+
+    // Update in-memory caches
+    const updateAssigneeInArray = (arr) => {
+      if (!Array.isArray(arr)) return;
+      const conv = arr.find(c => c && String(c.id) === String(conversationId));
+      if (conv) {
+        if (!conv.meta) conv.meta = {};
+        conv.meta.assignee = agent;
+      }
+    };
+    updateAssigneeInArray(openConversationsCache);
+    updateAssigneeInArray(fetchedConversations);
+
+    updateMineFilterVisibility();
+    filterAndRenderConversations();
+
+    chrome.runtime.sendMessage({
+      action: 'conversationAssigneeChanged',
+      conversationId,
+      accountId,
+      assignee: agent
+    }).catch(() => {});
+
+    showToast(agent ? `Conversa atribuída a ${agent.name}!` : 'Atribuição removida.', 'success');
+  } catch (err) {
+    console.error('Error assigning conversation:', err);
+    showToast(`Erro ao atribuir: ${err.message}`, 'error');
+  }
+}
+
+function updateMineFilterVisibility() {
+  const btnMine = document.getElementById('btn-filter-mine');
+  const badgeMine = document.getElementById('badge-filter-mine');
+  if (!btnMine) return;
+
+  if (!currentUserId) {
+    btnMine.classList.add('hidden');
+    return;
+  }
+
+  const myOpenConvs = openConversationsCache.filter(item => 
+    item && item.status !== 'resolved' && Number(item.meta?.assignee?.id) === Number(currentUserId)
+  );
+
+  const count = myOpenConvs.length;
+
+  if (count > 0) {
+    btnMine.classList.remove('hidden');
+    if (badgeMine) {
+      badgeMine.textContent = count;
+      badgeMine.classList.remove('hidden');
+    }
+  } else {
+    btnMine.classList.add('hidden');
+    if (badgeMine) badgeMine.classList.add('hidden');
+    if (activeChatFilter === 'mine') {
+      activeChatFilter = 'progress';
+      const btnProgress = document.getElementById('btn-filter-progress');
+      if (btnProgress) {
+        document.querySelectorAll('.chats-filter-bar .filter-chip').forEach(c => c.classList.remove('active'));
+        btnProgress.classList.add('active');
+      }
+    }
+  }
+}
+
+function updateMentionsFilterVisibility(count) {
+  const btnMentions = document.getElementById('btn-filter-mentions');
+  const badgeMentions = document.getElementById('badge-filter-mentions');
+  if (!btnMentions) return;
+
+  const total = typeof count === 'number' ? count : (cachedUserMentions ? cachedUserMentions.length : 0);
+
+  if (total > 0) {
+    btnMentions.classList.remove('hidden');
+    if (badgeMentions) {
+      badgeMentions.textContent = total;
+      badgeMentions.classList.remove('hidden');
+    }
+  } else {
+    btnMentions.classList.add('hidden');
+    if (badgeMentions) badgeMentions.classList.add('hidden');
+    if (activeChatFilter === 'mentions') {
+      activeChatFilter = 'progress';
+      const btnProgress = document.getElementById('btn-filter-progress');
+      if (btnProgress) {
+        document.querySelectorAll('.chats-filter-bar .filter-chip').forEach(c => c.classList.remove('active'));
+        btnProgress.classList.add('active');
+      }
+      filterAndRenderConversations();
+    }
+  }
+}
+
+// ==========================================
+// EXPORT REMINDERS TO CSV
+// ==========================================
+
+function escapeCsvCell(str) {
+  if (str === null || str === undefined) return '';
+  const val = String(str);
+  if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+    return `"${val.replace(/"/g, '""')}"`;
+  }
+  return val;
+}
+
+async function exportRemindersToCSV() {
+  const btn = document.getElementById('btn-export-reminders-csv');
+  const originalHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner" style="width:12px; height:12px; border-width:2px; margin:0 4px 0 0; display:inline-block; vertical-align:middle;"></span> Exportando...`;
+  }
+
+  try {
+    const list = await getRemindersFromStorage();
+    if (!list || list.length === 0) {
+      showToast('Nenhum lembrete salvo para exportar.', 'info');
+      return;
+    }
+
+    // Attempt to enrich missing phone numbers from cache or conversation API
+    for (const item of list) {
+      if (!item.contactPhone && item.conversationId && item.accountId) {
+        const conv = [...openConversationsCache, ...fetchedConversations].find(c => c && String(c.id) === String(item.conversationId));
+        if (conv) {
+          const ph = conv.meta?.sender?.phone_number || conv.sender?.phone_number || conv.meta?.sender?.identifier || '';
+          if (ph) item.contactPhone = ph;
+        } else if (config.url && config.token) {
+          try {
+            const apiConv = await chatwootFetch(`/api/v1/accounts/${item.accountId}/conversations/${item.conversationId}`);
+            const ph = apiConv?.meta?.sender?.phone_number || apiConv?.sender?.phone_number || apiConv?.meta?.sender?.identifier || '';
+            if (ph) item.contactPhone = ph;
+          } catch (e) {}
+        }
+      }
+    }
+
+    // Persist any enriched phone data
+    saveRemindersToStorage(list).catch(() => {});
+
+    // CSV format: Comma separated, individual column for each requested field
+    const headers = ['Nome do Contato', 'Telefone', 'Rótulos', 'Título', 'Anotações'];
+    const rows = [headers.map(escapeCsvCell).join(',')];
+
+    list.forEach(item => {
+      const contactName = item.contactName || '';
+      const phone = item.contactPhone || '';
+      const tags = Array.isArray(item.tags) ? item.tags.join(', ') : '';
+      const title = item.title || '';
+      const notes = item.notes || '';
+
+      rows.push([
+        escapeCsvCell(contactName),
+        escapeCsvCell(phone),
+        escapeCsvCell(tags),
+        escapeCsvCell(title),
+        escapeCsvCell(notes)
+      ].join(','));
+    });
+
+    const csvContent = '\uFEFF' + rows.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const filename = `lembretes-chatwoot-${dateStr}.csv`;
+
+    if (chrome.downloads && chrome.downloads.download) {
+      chrome.downloads.download({
+        url: url,
+        filename: filename,
+        saveAs: false
+      }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+          fallbackDownloadLink(url, filename);
+        } else {
+          showToast('Lembretes exportados com sucesso!', 'success');
+        }
+      });
+    } else {
+      fallbackDownloadLink(url, filename);
+    }
+
+    function fallbackDownloadLink(blobUrl, name) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast('Lembretes exportados com sucesso!', 'success');
+    }
+  } catch (err) {
+    console.error('Error exporting reminders to CSV:', err);
+    showToast(`Erro ao exportar CSV: ${err.message}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+}
+
+// ==========================================
+// USER MENTIONS IN PRIVATE NOTES SYSTEM
+// ==========================================
+let currentUserProfile = null;
+let cachedUserMentions = [];
+let isLoadingMentions = false;
+let convMessagesCache = {}; // convId -> { timestamp, messages }
+
+async function getCurrentUserProfile() {
+  if (currentUserProfile) return currentUserProfile;
+  try {
+    const profile = await chatwootFetch('/api/v1/profile');
+    if (profile) {
+      currentUserProfile = profile;
+      if (profile.id) currentUserId = profile.id;
+      return profile;
+    }
+  } catch (err) {
+    console.warn('Could not fetch user profile:', err);
+  }
+  return null;
+}
+
+function isUserMentionedInPrivateMessage(msg, profile) {
+  if (!msg || !profile) return false;
+  
+  // Verify it is a private note
+  const type = msg.message_type;
+  const isActivity = type === 2 || type === 'activity';
+  const isPrivate = (msg.private === true || type === 'private' || type === 2) && !isActivity;
+  if (!isPrivate) return false;
+
+  const content = msg.content || '';
+  if (!content.trim()) return false;
+
+  const userId = String(profile.id || '');
+  const fullName = (profile.name || '').trim();
+  const firstName = fullName.split(/\s+/)[0];
+
+  // 1. Chatwoot mention URI tag: mention://user/${userId}/...
+  if (userId && content.includes(`mention://user/${userId}/`)) {
+    return true;
+  }
+
+  // 2. Chatwoot mention markdown with name: [@Full Name] or [@First Name]
+  if (fullName && content.toLowerCase().includes(`[@${fullName.toLowerCase()}]`)) {
+    return true;
+  }
+  if (firstName && content.toLowerCase().includes(`[@${firstName.toLowerCase()}]`)) {
+    return true;
+  }
+
+  // 3. Simple @mention in text: @FullName or @FirstName (with word boundary)
+  if (fullName) {
+    const escapedFull = fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexFull = new RegExp(`@${escapedFull}(?![a-zA-Z0-9_])`, 'i');
+    if (regexFull.test(content)) return true;
+  }
+  if (firstName && firstName.length >= 2) {
+    const escapedFirst = firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexFirst = new RegExp(`@${escapedFirst}(?![a-zA-Z0-9_])`, 'i');
+    if (regexFirst.test(content)) return true;
+  }
+
+  return false;
+}
+
+async function loadUserMentions(forceRefresh = false) {
+  if (isLoadingMentions) return;
+  isLoadingMentions = true;
+
+  const container = elements.chatsList;
+  if (activeChatFilter === 'mentions' && container && (!cachedUserMentions || cachedUserMentions.length === 0 || forceRefresh)) {
+    container.innerHTML = `
+      <div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+        <div class="spinner" style="width: 24px; height: 24px; border: 3px solid var(--border-color); border-top-color: var(--primary-color); border-radius: 50%; margin: 0 auto 12px auto;"></div>
+        <p style="font-size: 12px; margin: 0;">Buscando menções em conversas ativas...</p>
+      </div>
+    `;
+  }
+
+  try {
+    const profile = await getCurrentUserProfile();
+    if (!profile) {
+      if (activeChatFilter === 'mentions' && container) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <h3>Perfil Não Carregado</h3>
+            <p>Não foi possível carregar seu perfil do Chatwoot para identificar suas menções.</p>
+          </div>
+        `;
+      }
+      return;
+    }
+
+    let accountId = config.defaultAccount;
+    if (!accountId && profile.accounts && profile.accounts.length > 0) {
+      accountId = profile.accounts[0].id;
+    }
+    if (!accountId) accountId = currentAccountId;
+
+    // 1. Ensure open conversations are loaded
+    if (!openConversationsCache || openConversationsCache.length === 0) {
+      try {
+        const openRes = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations?status=open&assignee_type=all`);
+        openConversationsCache = extractConversationsArray(openRes);
+      } catch (e) {
+        console.warn('Error fetching open conversations for mentions:', e);
+      }
+    }
+
+    const activeConvs = (openConversationsCache || []).filter(c => c && c.status !== 'resolved');
+
+    if (activeConvs.length === 0) {
+      cachedUserMentions = [];
+      updateMentionsFilterVisibility(0);
+      if (activeChatFilter === 'mentions') {
+        renderUserMentionsList([]);
+      }
+      return;
+    }
+
+    const mentionsFound = [];
+    const seenMsgIds = new Set();
+
+    // 2. Fetch messages for active conversations in parallel batches
+    const batchSize = 6;
+    for (let i = 0; i < activeConvs.length; i += batchSize) {
+      const batch = activeConvs.slice(i, i + batchSize);
+      await Promise.allSettled(batch.map(async (conv) => {
+        try {
+          const convId = conv.id;
+          const lastActivity = conv.last_activity_at || conv.timestamp || 0;
+
+          let messages = null;
+          if (!forceRefresh && convMessagesCache[convId] && convMessagesCache[convId].timestamp === lastActivity) {
+            messages = convMessagesCache[convId].messages;
+          } else {
+            const resp = await chatwootFetch(`/api/v1/accounts/${accountId}/conversations/${convId}/messages`);
+            messages = Array.isArray(resp) ? resp : (resp?.payload || []);
+            convMessagesCache[convId] = {
+              timestamp: lastActivity,
+              messages: messages
+            };
+          }
+
+          if (Array.isArray(messages)) {
+            messages.forEach(msg => {
+              if (msg && !seenMsgIds.has(msg.id)) {
+                if (isUserMentionedInPrivateMessage(msg, profile)) {
+                  seenMsgIds.add(msg.id);
+                  mentionsFound.push({
+                    messageId: msg.id,
+                    conversationId: conv.id,
+                    accountId: accountId,
+                    inboxId: conv.inbox_id,
+                    contactName: conv.meta?.sender?.name || conv.sender?.name || 'Cliente',
+                    contactAvatar: getSenderAvatarUrl(conv.meta?.sender || conv.sender),
+                    contactPhone: conv.meta?.sender?.phone_number || conv.sender?.phone_number || conv.meta?.sender?.identifier || '',
+                    mentionedBy: {
+                      name: msg.sender?.name || 'Atendente',
+                      avatar: getSenderAvatarUrl(msg.sender),
+                      id: msg.sender?.id
+                    },
+                    content: msg.content || '',
+                    createdAt: msg.created_at || Math.floor(Date.now() / 1000)
+                  });
+                }
+              }
+            });
+          }
+        } catch (err) {
+          console.warn(`Could not fetch messages for conv #${conv.id}:`, err);
+        }
+      }));
+    }
+
+    // Sort mentions by created_at descending (newest first)
+    mentionsFound.sort((a, b) => b.createdAt - a.createdAt);
+    cachedUserMentions = mentionsFound;
+
+    updateMentionsFilterVisibility(mentionsFound.length);
+    if (activeChatFilter === 'mentions') {
+      renderUserMentionsList(mentionsFound);
+    }
+  } catch (err) {
+    console.error('Error loading user mentions:', err);
+    if (activeChatFilter === 'mentions' && container) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <h3>Erro ao Buscar Menções</h3>
+          <p>${err.message || 'Erro ao carregar mensagens das conversas ativas.'}</p>
+        </div>
+      `;
+    }
+  } finally {
+    isLoadingMentions = false;
+  }
+}
+
+function renderUserMentionsList(mentions, targetContainer = null, customSearchQuery = null) {
+  const container = targetContainer || elements.chatsList;
+  if (!container) return;
+
+  const searchQuery = customSearchQuery !== null 
+    ? customSearchQuery.trim().toLowerCase() 
+    : (elements.chatsSearchInput?.value || '').trim().toLowerCase();
+
+  const filtered = (mentions || []).filter(item => {
+    if (!searchQuery) return true;
+    return (item.contactName || '').toLowerCase().includes(searchQuery) ||
+           (item.mentionedBy?.name || '').toLowerCase().includes(searchQuery) ||
+           (item.content || '').toLowerCase().includes(searchQuery) ||
+           String(item.conversationId).includes(searchQuery);
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path></svg>
+        <h3>${searchQuery ? 'Nenhuma menção encontrada' : 'Nenhuma Menção'}</h3>
+        <p>${searchQuery ? 'Nenhuma menção corresponde ao filtro pesquisado.' : 'Você não possui menções em notas privadas nas conversas ativas.'}</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = '';
+
+  filtered.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'mention-card';
+    card.setAttribute('data-conv-id', item.conversationId);
+    card.setAttribute('data-msg-id', item.messageId);
+
+    const contactAvatarHtml = getAvatarContent(item.contactName, item.contactAvatar);
+    const authorAvatarHtml = getAvatarContent(item.mentionedBy.name, item.mentionedBy.avatar);
+    const timeStr = item.createdAt ? formatRelativeTime(item.createdAt * 1000) : '';
+
+    let contentHtml = formatWhatsAppMarkdown(item.content);
+    if (currentUserProfile?.name) {
+      const fullName = currentUserProfile.name.trim();
+      const firstName = fullName.split(/\s+/)[0];
+      if (!contentHtml.includes('chat-mention-badge')) {
+        const escapedFull = fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escapedFirst = firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(@${escapedFull}|@${escapedFirst})`, 'gi');
+        contentHtml = contentHtml.replace(re, '<span class="mention-highlight">$1</span>');
+      }
+    }
+
+    card.innerHTML = `
+      <div class="mention-card-header">
+        <div class="mention-card-contact">
+          <div class="mention-avatar-contact">${contactAvatarHtml}</div>
+          <div class="mention-contact-info">
+            <span class="mention-contact-name">${escapeHtml(item.contactName)}</span>
+            <span class="mention-conv-meta">
+              #${item.conversationId} • <span class="inbox-name-badge" data-acc="${item.accountId}" data-inbox="${item.inboxId}"></span>
+            </span>
+          </div>
+        </div>
+        <span class="mention-time">${timeStr}</span>
+      </div>
+
+      <div class="mention-note-box">
+        <div class="mention-author-line">
+          <div class="mention-author-avatar">${authorAvatarHtml}</div>
+          <span class="mention-author-name">${escapeHtml(item.mentionedBy.name)}</span>
+          <span class="mention-private-tag">🔒 Nota Privada</span>
+        </div>
+        <div class="mention-content-text">${contentHtml}</div>
+      </div>
+
+      <div class="mention-card-footer">
+        <span class="mention-action-hint">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+          Abrir conversa e focar na mensagem
+        </span>
+      </div>
+    `;
+
+    card.addEventListener('click', () => {
+      openConversationFromMention(item);
+    });
+
+    container.appendChild(card);
+  });
+
+  resolveInboxNames();
+}
+
+function openConversationFromMention(item) {
+  if (!item) return;
+
+  if (isChatWindowMode) {
+    openConversationChat(item.conversationId, item.contactName, item.accountId, item.inboxId, item.messageId);
+    return;
+  }
+
+  chrome.storage.local.get(['openConversationWindows'], (res) => {
+    const winMap = res.openConversationWindows || {};
+    const winInfo = winMap[String(item.conversationId)];
+
+    if (winInfo && winInfo.windowId && winInfo.tabId) {
+      chrome.windows.get(winInfo.windowId, (existingWin) => {
+        if (!chrome.runtime.lastError && existingWin) {
+          chrome.tabs.update(winInfo.tabId, { active: true }).catch(() => {});
+          chrome.windows.update(winInfo.windowId, { state: 'normal', focused: true }).catch(() => {});
+          return;
+        }
+        openInCurrentPopup();
+      });
+    } else {
+      openInCurrentPopup();
+    }
+  });
+
+  function openInCurrentPopup() {
+    openConversationChat(item.conversationId, item.contactName, item.accountId, item.inboxId, item.messageId);
+  }
 }
 
 const sentTranscriptsSet = new Set();
@@ -6870,6 +8023,7 @@ function setupLightboxHandlers() {
 
   // Event delegation to capture media preview clicks (prevents CSP violations)
   if (elements.chatMessagesArea) {
+    elements.chatMessagesArea.addEventListener('scroll', updateFloatingDateOnScroll, { passive: true });
     elements.chatMessagesArea.addEventListener('click', (e) => {
       // 1. Click on Image preview
       const img = e.target.closest('.chat-img-preview');
@@ -7439,12 +8593,26 @@ function scrollToMessageId(id) {
 // ==========================================
 const linkPreviewsCache = {};
 
+function decodeHtmlEntities(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
+
 async function fetchLinkPreview(url) {
+  if (!url || typeof url !== 'string') return null;
   if (linkPreviewsCache[url]) return linkPreviewsCache[url];
 
+  let host = '';
   try {
     const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
+    host = parsed.hostname.toLowerCase();
 
     // Fast fallback for domains known to restrict cross-origin fetching or return non-HTML CORS blocks
     if (host.includes('chromewebstore.google.com') || 
@@ -7483,16 +8651,42 @@ async function fetchLinkPreview(url) {
       return fallback;
     }
 
-    const html = await response.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    const rawText = await response.text();
+    // Only inspect the head portion (up to 64KB) for metadata
+    const htmlHead = (rawText || '').slice(0, 65536);
 
-    const title = doc.querySelector('title')?.textContent || 
-                  doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || '';
-    const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || 
-                        doc.querySelector('meta[property="og:description"]')?.getAttribute('content') || '';
-    const image = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || 
-                  doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content') || '';
+    let title = '';
+    let description = '';
+    let image = '';
+
+    // Extract title (og:title, twitter:title, or <title>)
+    const ogTitleMatch = htmlHead.match(/<meta[^>]+(?:property|name)=["'](?:og:title|twitter:title)["'][^>]+content=["']([^"']*)["']/i) ||
+                         htmlHead.match(/<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
+    if (ogTitleMatch && ogTitleMatch[1]) {
+      title = ogTitleMatch[1];
+    } else {
+      const titleTagMatch = htmlHead.match(/<title[^>]*>([^<]*)<\/title>/i);
+      if (titleTagMatch && titleTagMatch[1]) {
+        title = titleTagMatch[1];
+      }
+    }
+
+    // Extract description (description, og:description, twitter:description)
+    const descMatch = htmlHead.match(/<meta[^>]+(?:name|property)=["'](?:description|og:description|twitter:description)["'][^>]+content=["']([^"']*)["']/i) ||
+                      htmlHead.match(/<meta[^>]+content=["']([^"']*)["'][^>]+(?:name|property)=["'](?:description|og:description|twitter:description)["']/i);
+    if (descMatch && descMatch[1]) {
+      description = descMatch[1];
+    }
+
+    // Extract image (og:image, twitter:image)
+    const imgMatch = htmlHead.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["'][^>]+content=["']([^"']*)["']/i) ||
+                     htmlHead.match(/<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["']/i);
+    if (imgMatch && imgMatch[1]) {
+      image = imgMatch[1];
+    }
+
+    title = decodeHtmlEntities(title);
+    description = decodeHtmlEntities(description);
 
     const preview = { 
       title: title.trim() || host, 
@@ -7503,14 +8697,9 @@ async function fetchLinkPreview(url) {
     linkPreviewsCache[url] = preview;
     return preview;
   } catch (err) {
-    try {
-      const parsed = new URL(url);
-      const fallback = { title: parsed.hostname, description: '', image: '', url };
-      linkPreviewsCache[url] = fallback;
-      return fallback;
-    } catch (e) {
-      return null;
-    }
+    const fallback = { title: host || url, description: '', image: '', url };
+    linkPreviewsCache[url] = fallback;
+    return fallback;
   }
 }
 
@@ -7523,29 +8712,41 @@ async function loadLinkPreviews() {
     const url = container.getAttribute('data-url');
     if (!url) return;
 
-    const preview = await fetchLinkPreview(url);
-    if (preview && (preview.title || preview.description)) {
-      const wasNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 150;
+    try {
+      const preview = await fetchLinkPreview(url);
+      if (preview && (preview.title || preview.description)) {
+        const wasNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 150;
 
-      container.innerHTML = `
-        <a href="${preview.url}" target="_blank" class="msg-link-preview-card" rel="noopener noreferrer">
-          ${preview.image ? `<img src="${preview.image}" alt="Preview" class="link-preview-img">` : ''}
-          <div class="link-preview-info">
-            <span class="link-preview-title">${preview.title}</span>
-            ${preview.description ? `<span class="link-preview-desc">${preview.description}</span>` : ''}
-            <span class="link-preview-domain">${new URL(preview.url).hostname}</span>
-          </div>
-        </a>
-      `;
-      
-      const img = container.querySelector('.link-preview-img');
-      if (img) {
-        img.addEventListener('load', () => scrollToBottom(wasNearBottom));
+        let domain = '';
+        try {
+          domain = new URL(preview.url).hostname;
+        } catch (e) {
+          domain = preview.url;
+        }
+
+        container.innerHTML = `
+          <a href="${escapeHtml(preview.url)}" target="_blank" class="msg-link-preview-card" rel="noopener noreferrer">
+            ${preview.image ? `<img src="${escapeHtml(preview.image)}" alt="Preview" class="link-preview-img">` : ''}
+            <div class="link-preview-info">
+              <span class="link-preview-title">${escapeHtml(preview.title)}</span>
+              ${preview.description ? `<span class="link-preview-desc">${escapeHtml(preview.description)}</span>` : ''}
+              <span class="link-preview-domain">${escapeHtml(domain)}</span>
+            </div>
+          </a>
+        `;
+        
+        const img = container.querySelector('.link-preview-img');
+        if (img) {
+          img.addEventListener('load', () => scrollToBottom(wasNearBottom));
+          img.addEventListener('error', () => { img.style.display = 'none'; });
+        }
+        
+        if (wasNearBottom) {
+          scrollToBottom(true);
+        }
       }
-      
-      if (wasNearBottom) {
-        scrollToBottom(true);
-      }
+    } catch (e) {
+      console.warn('Could not render link preview:', e);
     }
   });
 }
@@ -7585,8 +8786,9 @@ function restoreNavigationState() {
     const contactName = urlParams.get('contactName') || 'Cliente';
     const accountId = parseInt(urlParams.get('accountId'), 10) || config.defaultAccount;
     const inboxId = parseInt(urlParams.get('inboxId'), 10) || '';
+    const targetMsgId = urlParams.get('targetMsgId');
     if (convId) {
-      openConversationChat(convId, contactName, accountId, inboxId);
+      openConversationChat(convId, contactName, accountId, inboxId, targetMsgId);
     }
     return;
   }
