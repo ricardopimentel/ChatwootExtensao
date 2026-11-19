@@ -234,7 +234,11 @@ const elements = {
   attachContactDropdown: document.getElementById('attach-contact-dropdown'),
   attachContactName: document.getElementById('attach-contact-name'),
   attachContactPhone: document.getElementById('attach-contact-phone'),
-  btnConfirmAttachContact: document.getElementById('btn-confirm-attach-contact')
+  btnConfirmAttachContact: document.getElementById('btn-confirm-attach-contact'),
+  resolveConfirmModal: document.getElementById('resolve-confirm-modal'),
+  btnResolveModalClose: document.getElementById('btn-resolve-modal-close'),
+  btnResolveModalCancel: document.getElementById('btn-resolve-modal-cancel'),
+  btnResolveModalConfirm: document.getElementById('btn-resolve-modal-confirm')
 };
 
 // INITIALIZATION
@@ -6658,6 +6662,130 @@ function openConversationFromMention(item) {
 
 const sentTranscriptsSet = new Set();
 
+function showResolveConfirmModal(contactName, isResolved) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('resolve-confirm-modal');
+    if (!modal) {
+      const fallbackText = isResolved ? 'reabrir' : 'finalizar';
+      resolve(window.confirm(`Deseja realmente ${fallbackText} a conversa com ${contactName}?`));
+      return;
+    }
+
+    const titleEl = document.getElementById('resolve-modal-title');
+    const badgeEl = document.getElementById('resolve-modal-badge');
+    const questionEl = document.getElementById('resolve-modal-question');
+    const hintEl = document.getElementById('resolve-modal-hint');
+    const confirmBtn = document.getElementById('btn-resolve-modal-confirm');
+    const confirmText = document.getElementById('resolve-modal-confirm-text');
+    const confirmIcon = document.getElementById('resolve-modal-confirm-icon');
+    const cancelBtn = document.getElementById('btn-resolve-modal-cancel');
+    const closeBtn = document.getElementById('btn-resolve-modal-close');
+
+    const safeContactName = (contactName || 'este contato').trim();
+
+    if (isResolved) {
+      if (titleEl) titleEl.textContent = 'Reabrir Conversa';
+      if (badgeEl) {
+        badgeEl.className = 'resolve-modal-icon-badge reopen-mode';
+        badgeEl.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        `;
+      }
+      if (questionEl) {
+        questionEl.innerHTML = `Deseja realmente reabrir a conversa com <strong class="resolve-modal-highlight">${escapeHtml(safeContactName)}</strong>?`;
+      }
+      if (hintEl) {
+        hintEl.textContent = 'A conversa retornará para a lista de atendimentos abertos.';
+      }
+      if (confirmBtn) {
+        confirmBtn.className = 'btn resolve-modal-btn-confirm reopen-btn';
+      }
+      if (confirmText) confirmText.textContent = 'Reabrir';
+      if (confirmIcon) {
+        confirmIcon.innerHTML = `<path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>`;
+      }
+    } else {
+      if (titleEl) titleEl.textContent = 'Finalizar Conversa';
+      if (badgeEl) {
+        badgeEl.className = 'resolve-modal-icon-badge resolve-mode';
+        badgeEl.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        `;
+      }
+      if (questionEl) {
+        questionEl.innerHTML = `Deseja realmente finalizar a conversa com <strong class="resolve-modal-highlight">${escapeHtml(safeContactName)}</strong>?`;
+      }
+      if (hintEl) {
+        hintEl.textContent = 'A conversa será marcada como resolvida e arquivada do atendimento ativo.';
+      }
+      if (confirmBtn) {
+        confirmBtn.className = 'btn resolve-modal-btn-confirm resolve-btn';
+      }
+      if (confirmText) confirmText.textContent = 'Finalizar';
+      if (confirmIcon) {
+        confirmIcon.innerHTML = `<polyline points="20 6 9 17 4 12"></polyline>`;
+      }
+    }
+
+    modal.classList.remove('hidden');
+
+    let isDone = false;
+    function cleanup(result) {
+      if (isDone) return;
+      isDone = true;
+      modal.classList.add('hidden');
+      confirmBtn?.removeEventListener('click', onConfirm);
+      cancelBtn?.removeEventListener('click', onCancel);
+      closeBtn?.removeEventListener('click', onCancel);
+      modal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKeyDown);
+      resolve(result);
+    }
+
+    function onConfirm(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      cleanup(true);
+    }
+
+    function onCancel(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      cleanup(false);
+    }
+
+    function onBackdrop(e) {
+      if (e.target === modal) {
+        e.preventDefault();
+        e.stopPropagation();
+        cleanup(false);
+      }
+    }
+
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cleanup(false);
+      }
+    }
+
+    confirmBtn?.addEventListener('click', onConfirm);
+    cancelBtn?.addEventListener('click', onCancel);
+    closeBtn?.addEventListener('click', onCancel);
+    modal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKeyDown);
+
+    // Give focus to confirm button for intuitive keyboard action
+    setTimeout(() => {
+      confirmBtn?.focus();
+    }, 50);
+  });
+}
+
 async function resolveCurrentConversation() {
   if (!currentActiveChat) return;
 
@@ -6667,7 +6795,8 @@ async function resolveCurrentConversation() {
   const actionText = isResolved ? 'reabrir' : 'finalizar';
   const newStatus = isResolved ? 'open' : 'resolved';
 
-  if (!confirm(`Deseja realmente ${actionText} a conversa com ${contactName}?`)) {
+  const confirmed = await showResolveConfirmModal(contactName, isResolved);
+  if (!confirmed) {
     return;
   }
 
