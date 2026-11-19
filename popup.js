@@ -476,6 +476,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateUnreadBadgeLocal();
         updateMineFilterVisibility();
         filterAndRenderConversations();
+      } else if (message.action === 'focusTargetMessage') {
+        if (message.messageId) {
+          const found = currentChatMessages.some(m => String(m.id) === String(message.messageId));
+          if (found) {
+            scrollToMessageId(message.messageId);
+          } else if (currentActiveChat) {
+            currentActiveChat.targetMessageId = String(message.messageId);
+            loadChatMessages(currentActiveChat.accountId, currentActiveChat.id, true);
+          }
+        }
       }
     });
 
@@ -5146,6 +5156,13 @@ function createSideBySideConversationWindow(url, callback) {
 function openConversationInWindow(conversationId, contactName, accountId, inboxId, targetMsgId = null) {
   const strConvId = String(conversationId);
   startActiveConversationHeartbeat(strConvId);
+
+  if (isChatWindowMode && currentActiveChat && String(currentActiveChat.id) === strConvId) {
+    if (targetMsgId) {
+      scrollToMessageId(targetMsgId);
+    }
+    return;
+  }
   
   // Clean unread status in BOTH caches instantly for a premium responsive feel
   const clearUnread = (arr) => {
@@ -5190,6 +5207,9 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
         if (!chrome.runtime.lastError && existingWin) {
           chrome.tabs.update(winInfo.tabId, { active: true }).catch(() => {});
           chrome.windows.update(winInfo.windowId, { state: 'normal', focused: true }).catch(() => {});
+          if (targetMsgId) {
+            chrome.tabs.sendMessage(winInfo.tabId, { action: 'focusTargetMessage', messageId: targetMsgId }).catch(() => {});
+          }
           return; // Focused existing window! STOP!
         }
         
@@ -5212,6 +5232,9 @@ function openConversationInWindow(conversationId, contactName, accountId, inboxI
         if (existingTab) {
           chrome.tabs.update(existingTab.id, { active: true }).catch(() => {});
           chrome.windows.update(existingTab.windowId, { state: 'normal', focused: true }).catch(() => {});
+          if (targetMsgId) {
+            chrome.tabs.sendMessage(existingTab.id, { action: 'focusTargetMessage', messageId: targetMsgId }).catch(() => {});
+          }
         } else {
           const url = chrome.runtime.getURL(`popup.html?convId=${conversationId}&contactName=${encodeURIComponent(contactName)}&accountId=${accountId}&inboxId=${inboxId || ''}${targetMsgId ? `&targetMsgId=${targetMsgId}` : ''}`);
           createSideBySideConversationWindow(url);
@@ -5273,6 +5296,7 @@ async function loadChatMessages(accountId, conversationId, silent = false, befor
 
     // If a target message ID was requested (e.g. from Mentions tab), locate and highlight it
     if (currentActiveChat && currentActiveChat.targetMessageId) {
+      isFocusingTargetMessage = true;
       const targetId = currentActiveChat.targetMessageId;
       const found = currentChatMessages.some(m => String(m.id) === String(targetId));
 
@@ -5288,6 +5312,7 @@ async function loadChatMessages(accountId, conversationId, silent = false, befor
         }
       } else {
         currentActiveChat.targetMessageId = null;
+        isFocusingTargetMessage = false;
       }
     }
   } catch (err) {
@@ -5718,6 +5743,8 @@ function renderChatMessages(messages, silent, isPrepend = false) {
     if (isPrepend) {
       const newScrollHeight = elements.chatMessagesArea.scrollHeight;
       elements.chatMessagesArea.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+    } else if (isFocusingTargetMessage || (currentActiveChat && currentActiveChat.targetMessageId)) {
+      // Don't scroll to bottom when focusing a target message
     } else if (!silent || isNearBottom) {
       scrollToBottom(true);
     } else {
@@ -6548,7 +6575,12 @@ function renderUserMentionsList(mentions, targetContainer = null, customSearchQu
     card.setAttribute('data-conv-id', item.conversationId);
     card.setAttribute('data-msg-id', item.messageId);
 
-    const contactAvatarHtml = getAvatarContent(item.contactName, item.contactAvatar);
+    const rawContactName = (item.contactName || '').trim();
+    const phoneNumber = item.contactPhone || item.phone || '';
+    const isPlaceholderName = !rawContactName || rawContactName === '.' || rawContactName === '-' || rawContactName === '_' || rawContactName === phoneNumber;
+    const effectiveDisplayName = isPlaceholderName ? (phoneNumber || 'Cliente') : rawContactName;
+
+    const contactAvatarHtml = getAvatarContent(effectiveDisplayName, item.contactAvatar);
     const authorAvatarHtml = getAvatarContent(item.mentionedBy.name, item.mentionedBy.avatar);
     const timeStr = item.createdAt ? formatRelativeTime(item.createdAt * 1000) : '';
 
@@ -6569,7 +6601,7 @@ function renderUserMentionsList(mentions, targetContainer = null, customSearchQu
         <div class="mention-card-contact">
           <div class="mention-avatar-contact">${contactAvatarHtml}</div>
           <div class="mention-contact-info">
-            <span class="mention-contact-name">${escapeHtml(item.contactName)}</span>
+            <span class="mention-contact-name">${escapeHtml(effectiveDisplayName)}</span>
             <span class="mention-conv-meta">
               #${item.conversationId} • <span class="inbox-name-badge" data-acc="${item.accountId}" data-inbox="${item.inboxId}"></span>
             </span>
@@ -6608,32 +6640,12 @@ function renderUserMentionsList(mentions, targetContainer = null, customSearchQu
 function openConversationFromMention(item) {
   if (!item) return;
 
-  if (isChatWindowMode) {
-    openConversationChat(item.conversationId, item.contactName, item.accountId, item.inboxId, item.messageId);
-    return;
-  }
+  const rawContactName = (item.contactName || '').trim();
+  const phoneNumber = item.contactPhone || item.phone || '';
+  const isPlaceholderName = !rawContactName || rawContactName === '.' || rawContactName === '-' || rawContactName === '_' || rawContactName === phoneNumber;
+  const effectiveDisplayName = isPlaceholderName ? (phoneNumber || 'Cliente') : rawContactName;
 
-  chrome.storage.local.get(['openConversationWindows'], (res) => {
-    const winMap = res.openConversationWindows || {};
-    const winInfo = winMap[String(item.conversationId)];
-
-    if (winInfo && winInfo.windowId && winInfo.tabId) {
-      chrome.windows.get(winInfo.windowId, (existingWin) => {
-        if (!chrome.runtime.lastError && existingWin) {
-          chrome.tabs.update(winInfo.tabId, { active: true }).catch(() => {});
-          chrome.windows.update(winInfo.windowId, { state: 'normal', focused: true }).catch(() => {});
-          return;
-        }
-        openInCurrentPopup();
-      });
-    } else {
-      openInCurrentPopup();
-    }
-  });
-
-  function openInCurrentPopup() {
-    openConversationChat(item.conversationId, item.contactName, item.accountId, item.inboxId, item.messageId);
-  }
+  openConversationInWindow(item.conversationId, effectiveDisplayName, item.accountId, item.inboxId, item.messageId);
 }
 
 const sentTranscriptsSet = new Set();
@@ -8568,8 +8580,11 @@ function setupContextMenuHandlers() {
   });
 }
 
+let isFocusingTargetMessage = false;
+
 // Scroll viewport to target message ID and play flash highlight animation
 function scrollToMessageId(id) {
+  isFocusingTargetMessage = true;
   const targetEl = elements.chatMessagesArea.querySelector(`[data-msg-id="${id}"]`);
   if (targetEl) {
     targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -8582,8 +8597,10 @@ function scrollToMessageId(id) {
     // Clean up class after animation ends
     setTimeout(() => {
       targetEl.classList.remove('highlight-flash');
-    }, 1400);
+      isFocusingTargetMessage = false;
+    }, 1800);
   } else {
+    isFocusingTargetMessage = false;
     showToast('Mensagem original não carregada no histórico atual.', 'error');
   }
 }
@@ -8752,7 +8769,7 @@ async function loadLinkPreviews() {
 }
 
 function scrollToBottom(force = false) {
-  if (!elements.chatMessagesArea) return;
+  if (!elements.chatMessagesArea || isFocusingTargetMessage) return;
   const isNearBottom = elements.chatMessagesArea.scrollHeight - elements.chatMessagesArea.scrollTop - elements.chatMessagesArea.clientHeight < 150;
   if (force || isNearBottom) {
     elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
