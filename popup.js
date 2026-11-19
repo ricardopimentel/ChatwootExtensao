@@ -4884,6 +4884,10 @@ function openConversationChat(conversationId, contactName, accountId, inboxId, t
   const emojiPicker = document.getElementById('emoji-picker');
   if (emojiPicker) emojiPicker.classList.add('hidden');
 
+  window.scrollTo(0, 0);
+  document.body.scrollTop = 0;
+  if (elements.chatsDetailView) elements.chatsDetailView.scrollTop = 0;
+
   const conversation = [...fetchedConversations, ...openConversationsCache].find(c => c && c.id === conversationId);
   const senderObj = conversation?.meta?.sender || conversation?.sender;
   const senderId = senderObj?.id;
@@ -5782,6 +5786,10 @@ function closeChatView() {
   if (btnToggleToolbar) btnToggleToolbar.classList.remove('active');
   const emojiPicker = document.getElementById('emoji-picker');
   if (emojiPicker) emojiPicker.classList.add('hidden');
+
+  window.scrollTo(0, 0);
+  document.body.scrollTop = 0;
+  if (elements.chatsDetailView) elements.chatsDetailView.scrollTop = 0;
 
   elements.chatsDetailView.classList.add('hidden');
   elements.chatsListView.classList.remove('hidden');
@@ -8585,9 +8593,31 @@ let isFocusingTargetMessage = false;
 // Scroll viewport to target message ID and play flash highlight animation
 function scrollToMessageId(id) {
   isFocusingTargetMessage = true;
-  const targetEl = elements.chatMessagesArea.querySelector(`[data-msg-id="${id}"]`);
+  const container = elements.chatMessagesArea;
+  if (!container) {
+    isFocusingTargetMessage = false;
+    return;
+  }
+
+  // Ensure window and detail view are never accidentally scrolled off-screen
+  window.scrollTo(0, 0);
+  document.body.scrollTop = 0;
+  if (elements.chatsDetailView) elements.chatsDetailView.scrollTop = 0;
+
+  const targetEl = container.querySelector(`[data-msg-id="${id}"]`);
   if (targetEl) {
-    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = targetEl.getBoundingClientRect();
+
+    // Calculate position of targetEl relative to container's internal scroll position
+    const targetOffset = targetRect.top - containerRect.top + container.scrollTop;
+    // Center targetEl inside container viewport
+    const desiredScrollTop = targetOffset - (container.clientHeight / 2) + (targetEl.clientHeight / 2);
+
+    container.scrollTo({
+      top: Math.max(0, desiredScrollTop),
+      behavior: 'smooth'
+    });
 
     // Apply flash highlight animation overlay
     targetEl.classList.remove('highlight-flash');
@@ -8598,6 +8628,9 @@ function scrollToMessageId(id) {
     setTimeout(() => {
       targetEl.classList.remove('highlight-flash');
       isFocusingTargetMessage = false;
+      // Extra safety check: ensure outer view remained at (0,0)
+      if (elements.chatsDetailView) elements.chatsDetailView.scrollTop = 0;
+      window.scrollTo(0, 0);
     }, 1800);
   } else {
     isFocusingTargetMessage = false;
